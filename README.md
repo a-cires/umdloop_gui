@@ -1,8 +1,18 @@
 ## Getting Started
+Install These Dependencies
+```bash
+Python v3.12
+React
+Node.js
+OpenCV
+Numpy
+ROS2 Humble
+```
 
 Navigate into the web gui folder:
 
 ```bash
+cd umdloop_gui-main
 cd umdloop_gui_web
 ```
 
