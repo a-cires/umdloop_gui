@@ -1,11 +1,13 @@
 import cv2
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 import subprocess
 import os
 import signal
 import sys
 from ultralytics import YOLO
+from ros_bridge import ros_context
+
 
 app = Flask(__name__)
 CORS(app)
@@ -135,6 +137,42 @@ def status():
     running = process is not None and process.poll() is None
     return jsonify({"ok": True, "running": running}), 200
 
+
+@app.post("/navigation/path-plan")
+def navigation_path_plan():
+    data = request.get_json(silent=True) or {}
+
+    mode = data.get("mode")
+    if mode != "GNSS":
+        return jsonify({
+            "ok": True,
+            "action_called": False,
+            "message": f"No ROS action for mode '{mode}'"
+        })
+
+    try:
+        lat = float(data["latitude"])
+        lon = float(data["longitude"])
+        tol = float(data.get("position_tolerance", 0.0))
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid latitude/longitude"}), 400
+
+    # Start ROS once
+    ros_context.start()
+
+    accepted, success, msg = ros_context.node.send_gps_goal_blocking(
+        lat, lon, tol
+    )
+
+    return jsonify({
+        "ok": True,
+        "action_called": True,
+        "accepted": accepted,
+        "success": success,
+        "message": msg
+    })
+
+
 if __name__ == "__main__":
     # exposes to all network interfaces, run app in debug mode on port 5000
-    app.run(host='0.0.0.0', debug=True)
+    app.run(host='0.0.0.0', debug=True, use_reloader=False)
