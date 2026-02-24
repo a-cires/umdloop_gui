@@ -612,23 +612,21 @@ function PageContent({ selectedMode, selectedSubsystem, setSelectedSubsystem, se
   }
   else if (selectedMode === "Navigation") {
     return (
-      <div style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: "10px", minHeight: 0, height: "100%", padding: "10px" }}>
-        <div style={{ border: "1px solid #333", borderRadius: "10px", overflow: "hidden", background: "#1f1f1f" }}>
+      <div style={{ minHeight: 0, height: "100%", padding: "10px" }}>
+        <div style={{ border: "1px solid #333", borderRadius: "10px", overflow: "hidden", background: "#1f1f1f", height: "100%", display: "flex", flexDirection: "column" }}>
           <SubsystemBar
             buttons={NAVIGATION_BUTTONS}
             selected={selectedNavItem}
             setSelected={setSelectedNavItem}
           />
-          <div style={{ padding: "8px" }}>
-            <Navigation selectedNavItem={selectedNavItem} />
+          <div style={{ padding: "8px", overflow: "auto" }}>
+            <Navigation
+              selectedNavItem={selectedNavItem}
+              selectedSubsystem={selectedSubsystem}
+              sharedRos={sharedRos}
+              setSharedRos={setSharedRos}
+            />
           </div>
-        </div>
-        <div style={{ border: "1px solid #333", borderRadius: "10px", overflow: "auto", background: "#1f1f1f" }}>
-          <ROS2Entities
-            selectedSubsystem={selectedSubsystem}
-            sharedRos={sharedRos}
-            setSharedRos={setSharedRos}
-          />
         </div>
       </div>
     );
@@ -1130,7 +1128,7 @@ export const NAVIGATION_BUTTONS = [
   "Placeholder2",
 ];
 
-function Navigation({selectedNavItem}) {
+function Navigation({ selectedNavItem, selectedSubsystem, sharedRos, setSharedRos }) {
   const [running, setRunning] = useState(false);
   const [pid, setPid] = useState(null);
   const [error, setError] = useState("");
@@ -1321,6 +1319,14 @@ function Navigation({selectedNavItem}) {
               src="http://127.0.0.1:5000/object-detection/stream/0"
               alt="Object Detection Stream"
               style={{ width: "640px", height: "480px" }}
+            />
+          </div>
+
+          <div style={{ width: "100%", border: "1px solid #333", borderRadius: "10px", overflow: "auto", background: "#1f1f1f" }}>
+            <ROS2Entities
+              selectedSubsystem={selectedSubsystem}
+              sharedRos={sharedRos}
+              setSharedRos={setSharedRos}
             />
           </div>
         </div>
