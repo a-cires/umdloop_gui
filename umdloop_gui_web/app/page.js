@@ -1,14 +1,15 @@
 "use client";
 
-import React, { useState,useEffect, Fragment} from 'react';
+import React, { useState,useEffect } from 'react';
 
 
 import ROSLIB from "roslib";
 import MapView from "./MapView";
+import OperationsWall from "./OperationsWall";
 import { getRosbridgeUrl } from "./config";
 
-export const modes = ["Simulation", "Cameras", "Sensors", "ROS2 Entities", "Navigation", "Mission", "Map"];
-export const icons = ["simulation.png", "camera.png", "sensor.png", "ros2.png", "navigation.png", "mission.png", "navigation.png"];
+export const modes = ["Simulation", "Operator", "Science Missions", "Technician", "Drone", "Navigation"];
+export const icons = ["simulation.png", "camera.png", "sensor.png", "sensor.png", "camera.png", "navigation.png"];
 export const subsystems = ["Drive", "Arm", "Science"];
 
 function NavigationBar( {selectedMode, setSelectedMode} ) {
@@ -173,29 +174,464 @@ function SubsystemBar({ buttons, selected, setSelected }) {
   );
 }
 
+function TechnicianDashboard() {
+  const [setHours, setSetHours] = useState("00");
+  const [setMinutes, setSetMinutes] = useState("10");
+  const [setSeconds, setSetSeconds] = useState("00");
+  const [configuredSeconds, setConfiguredSeconds] = useState(600);
+  const [remainingSeconds, setRemainingSeconds] = useState(600);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [ledState, setLedState] = useState("GREEN");
+  const [laserWarningOn, setLaserWarningOn] = useState(false);
+  const [rosStatus, setRosStatus] = useState("connecting...");
+  const [bytesPerSecond, setBytesPerSecond] = useState(0);
+  const [roverVelocityMps, setRoverVelocityMps] = useState(0);
+  const [tilt, setTilt] = useState({ rollDeg: 0, pitchDeg: 0, magnitudeDeg: 0, vectorLabel: "CENTERED" });
+  const [sensorTemps, setSensorTemps] = useState({
+    driveController: 41.2,
+    armController: 39.8,
+    batteryPack: 35.1,
+    avionics: 37.4,
+  });
+  const [powerStats, setPowerStats] = useState({ batteryDrive: 94, batteryArm: 88 });
+  const [radioLevel, setRadioLevel] = useState(82);
+  const [wheelDiag, setWheelDiag] = useState({
+    fl: { velocity: 0, current: 0 },
+    fr: { velocity: 0, current: 0 },
+    rl: { velocity: 0, current: 0 },
+    rr: { velocity: 0, current: 0 },
+  });
+  const [steerDiag, setSteerDiag] = useState({
+    fl: { orientationDeg: 0, current: 0 },
+    fr: { orientationDeg: 0, current: 0 },
+    rl: { orientationDeg: 0, current: 0 },
+    rr: { orientationDeg: 0, current: 0 },
+  });
+  const [motorEnabled, setMotorEnabled] = useState({
+    wheelFL: true,
+    wheelFR: true,
+    wheelRL: true,
+    wheelRR: true,
+    steerFL: true,
+    steerFR: true,
+    steerRL: true,
+    steerRR: true,
+  });
 
-function PageContent({ selectedMode, selectedSubsystem, selectedNavItem, setSelectedNavItem, sharedRos, setSharedRos }) {
-  if (selectedMode === "Cameras") {
-    return <Cameras selectedSubsystem={selectedSubsystem} />;
+  useEffect(() => {
+    if (!timerRunning) return undefined;
+    const id = setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          setTimerRunning(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [timerRunning]);
+
+  useEffect(() => {
+    const ros = new ROSLIB.Ros({ url: getRosbridgeUrl() });
+    let byteCounter = 0;
+
+    ros.on("connection", () => setRosStatus("connected"));
+    ros.on("error", () => setRosStatus("error"));
+    ros.on("close", () => setRosStatus("disconnected"));
+
+    const countBytes = (msg) => {
+      try {
+        byteCounter += JSON.stringify(msg).length;
+      } catch (_) {
+        byteCounter += 0;
+      }
+    };
+
+    const odomTopic = new ROSLIB.Topic({ ros, name: "/odom", messageType: "nav_msgs/msg/Odometry" });
+    odomTopic.subscribe((msg) => {
+      countBytes(msg);
+      const linear = msg?.twist?.twist?.linear;
+      if (!linear) return;
+      const mag = Math.sqrt((linear.x || 0) ** 2 + (linear.y || 0) ** 2 + (linear.z || 0) ** 2);
+      setRoverVelocityMps(mag);
+    });
+
+    const imuTopic = new ROSLIB.Topic({ ros, name: "/imu/data", messageType: "sensor_msgs/msg/Imu" });
+    imuTopic.subscribe((msg) => {
+      countBytes(msg);
+      const q = msg?.orientation;
+      if (!q) return;
+      const qw = q.w || 1;
+      const qx = q.x || 0;
+      const qy = q.y || 0;
+      const qz = q.z || 0;
+      const sinrCosp = 2 * (qw * qx + qy * qz);
+      const cosrCosp = 1 - 2 * (qx * qx + qy * qy);
+      const roll = Math.atan2(sinrCosp, cosrCosp);
+      const sinp = 2 * (qw * qy - qz * qx);
+      const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * (Math.PI / 2) : Math.asin(sinp);
+      const rollDeg = roll * (180 / Math.PI);
+      const pitchDeg = pitch * (180 / Math.PI);
+      const magnitudeDeg = Math.sqrt(rollDeg ** 2 + pitchDeg ** 2);
+      const lr = rollDeg >= 0 ? "RIGHT" : "LEFT";
+      const fb = pitchDeg >= 0 ? "FRONT" : "BACK";
+      setTilt({
+        rollDeg,
+        pitchDeg,
+        magnitudeDeg,
+        vectorLabel: magnitudeDeg < 0.4 ? "CENTERED" : `${fb}-${lr}`,
+      });
+    });
+
+    const jointStateTopic = new ROSLIB.Topic({ ros, name: "/joint_states", messageType: "sensor_msgs/msg/JointState" });
+    jointStateTopic.subscribe((msg) => {
+      countBytes(msg);
+      const names = msg?.name || [];
+      const positions = msg?.position || [];
+      const velocities = msg?.velocity || [];
+      const efforts = msg?.effort || [];
+
+      const idxByPatterns = (patterns) =>
+        names.findIndex((n) => patterns.some((p) => n.toLowerCase().includes(p)));
+
+      const wheelPatterns = {
+        fl: ["front_left_wheel", "wheel_fl", "fl_wheel", "left_front_wheel"],
+        fr: ["front_right_wheel", "wheel_fr", "fr_wheel", "right_front_wheel"],
+        rl: ["rear_left_wheel", "wheel_rl", "rl_wheel", "left_rear_wheel"],
+        rr: ["rear_right_wheel", "wheel_rr", "rr_wheel", "right_rear_wheel"],
+      };
+      const steerPatterns = {
+        fl: ["front_left_steer", "steer_fl", "fl_steer", "left_front_steer"],
+        fr: ["front_right_steer", "steer_fr", "fr_steer", "right_front_steer"],
+        rl: ["rear_left_steer", "steer_rl", "rl_steer", "left_rear_steer"],
+        rr: ["rear_right_steer", "steer_rr", "rr_steer", "right_rear_steer"],
+      };
+
+      const nextWheel = {
+        fl: { velocity: 0, current: 0 },
+        fr: { velocity: 0, current: 0 },
+        rl: { velocity: 0, current: 0 },
+        rr: { velocity: 0, current: 0 },
+      };
+      Object.keys(wheelPatterns).forEach((k) => {
+        const idx = idxByPatterns(wheelPatterns[k]);
+        if (idx >= 0) {
+          nextWheel[k] = {
+            velocity: Number(velocities[idx] || 0),
+            current: Number(efforts[idx] || 0),
+          };
+        }
+      });
+      setWheelDiag(nextWheel);
+
+      const nextSteer = {
+        fl: { orientationDeg: 0, current: 0 },
+        fr: { orientationDeg: 0, current: 0 },
+        rl: { orientationDeg: 0, current: 0 },
+        rr: { orientationDeg: 0, current: 0 },
+      };
+      Object.keys(steerPatterns).forEach((k) => {
+        const idx = idxByPatterns(steerPatterns[k]);
+        if (idx >= 0) {
+          nextSteer[k] = {
+            orientationDeg: Number((positions[idx] || 0) * (180 / Math.PI)),
+            current: Number(efforts[idx] || 0),
+          };
+        }
+      });
+      setSteerDiag(nextSteer);
+    });
+
+    const bytesInterval = setInterval(() => {
+      setBytesPerSecond(byteCounter);
+      byteCounter = 0;
+    }, 1000);
+
+    return () => {
+      clearInterval(bytesInterval);
+      odomTopic.unsubscribe();
+      imuTopic.unsubscribe();
+      jointStateTopic.unsubscribe();
+      ros.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setPowerStats((prev) => ({
+        batteryDrive: Math.max(8, prev.batteryDrive - 0.03),
+        batteryArm: Math.max(8, prev.batteryArm - 0.02),
+      }));
+      setRadioLevel((prev) => Math.max(15, Math.min(100, prev + (Math.random() * 4 - 2))));
+      setSensorTemps((prev) => ({
+        driveController: Math.max(20, Math.min(95, prev.driveController + (Math.random() * 0.8 - 0.4))),
+        armController: Math.max(20, Math.min(95, prev.armController + (Math.random() * 0.8 - 0.4))),
+        batteryPack: Math.max(20, Math.min(95, prev.batteryPack + (Math.random() * 0.6 - 0.3))),
+        avionics: Math.max(20, Math.min(95, prev.avionics + (Math.random() * 0.7 - 0.35))),
+      }));
+    }, 1200);
+    return () => clearInterval(id);
+  }, []);
+
+  const hours = String(Math.floor(remainingSeconds / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((remainingSeconds % 3600) / 60)).padStart(2, "0");
+  const seconds = String(remainingSeconds % 60).padStart(2, "0");
+
+  const applyTimer = () => {
+    const h = Math.max(0, parseInt(setHours, 10) || 0);
+    const m = Math.max(0, parseInt(setMinutes, 10) || 0);
+    const s = Math.max(0, parseInt(setSeconds, 10) || 0);
+    const total = h * 3600 + m * 60 + s;
+    setConfiguredSeconds(total);
+    setRemainingSeconds(total);
+    setTimerRunning(false);
+  };
+
+  const tiltWarning = tilt.magnitudeDeg > 12;
+  const safetyPercent = Math.max(0, Math.min(100, (tilt.magnitudeDeg / 15) * 100));
+  const wheelFault = Object.values(wheelDiag).some((wheel) => Math.abs(wheel.current) > 18);
+
+  const systemChecks = [
+    { name: "ROS Link", ok: rosStatus === "connected" },
+    { name: "Power Bus", ok: powerStats.batteryDrive > 15 && powerStats.batteryArm > 15 },
+    { name: "Thermal", ok: Object.values(sensorTemps).every((t) => t < 75) },
+    { name: "Mobility Motors", ok: Object.values(motorEnabled).some(Boolean) },
+    { name: "Safety Envelope", ok: !tiltWarning },
+  ];
+
+  return (
+    <div
+      style={{
+        height: "100%",
+        minHeight: "100%",
+        padding: "10px",
+        overflowY: "auto",
+        display: "grid",
+        gridTemplateColumns: "1fr",
+        gridTemplateRows: "auto minmax(240px, 1fr) minmax(280px, 1.2fr) minmax(250px, 1fr) minmax(250px, 1fr)",
+        gap: "10px",
+        alignItems: "stretch",
+      }}
+    >
+      <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
+        <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "6px" }}>Mission Clock</div>
+        <div style={{ fontSize: "28px", fontWeight: 900, color: "white", letterSpacing: "1px" }}>{hours}:{minutes}:{seconds}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "6px", marginTop: "10px" }}>
+          <input value={setHours} onChange={(e) => setSetHours(e.target.value)} placeholder="HH" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white" }} />
+          <input value={setMinutes} onChange={(e) => setSetMinutes(e.target.value)} placeholder="MM" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white" }} />
+          <input value={setSeconds} onChange={(e) => setSetSeconds(e.target.value)} placeholder="SS" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white" }} />
+          <button onClick={applyTimer} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #5a5a5a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer" }}>Set</button>
+        </div>
+        <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+          <button onClick={() => setTimerRunning(true)} disabled={remainingSeconds <= 0} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #2f6b2f", background: remainingSeconds > 0 ? "#1f7a1f" : "#3a3a3a", color: "white", fontWeight: 700, cursor: remainingSeconds > 0 ? "pointer" : "not-allowed" }}>Start</button>
+          <button onClick={() => setTimerRunning(false)} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #6a6a6a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer" }}>Pause</button>
+          <button onClick={() => { setTimerRunning(false); setRemainingSeconds(configuredSeconds); }} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #6a6a6a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer" }}>Reset</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", alignItems: "stretch", height: "100%" }}>
+        <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "16px", minHeight: "220px" }}>
+          <div style={{ fontSize: "14px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Power / Environment</div>
+          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "4px" }}>Battery Drive: <b>{powerStats.batteryDrive.toFixed(1)}%</b></div>
+          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "4px" }}>Battery Arm: <b>{powerStats.batteryArm.toFixed(1)}%</b></div>
+          <div style={{ marginTop: 10, fontSize: "13px", color: "#d8d8d8", marginBottom: "4px" }}>Temps:</div>
+          {Object.entries(sensorTemps).map(([k, v]) => (
+            <div key={k} style={{ fontSize: "13px", color: "#efefef", marginBottom: "3px" }}>{k}: {v.toFixed(1)} C</div>
+          ))}
+        </div>
+        <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "16px", minHeight: "220px" }}>
+          <div style={{ fontSize: "14px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Comms / Link Health</div>
+          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>ROS Link: <b>{rosStatus}</b></div>
+          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>Radio Connectivity: <b>{radioLevel.toFixed(0)}%</b></div>
+          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>Info Rate: <b>{bytesPerSecond.toFixed(0)} B/s</b></div>
+          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>Rover Velocity (telemetry): <b>{roverVelocityMps.toFixed(2)} m/s</b></div>
+        </div>
+      </div>
+
+      <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px", height: "100%" }}>
+        <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Mobility Diagnostics (Wheel + Steering)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+          {["fl", "fr", "rl", "rr"].map((key) => (
+            <div key={key} style={{ background: "#2a2a2a", border: "1px solid #3f3f3f", borderRadius: "8px", padding: "8px" }}>
+              <div style={{ fontWeight: 800, color: "white", fontSize: "12px", marginBottom: "4px" }}>{key.toUpperCase()}</div>
+              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Wheel vel: {wheelDiag[key].velocity.toFixed(2)} rad/s</div>
+              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Wheel curr: {wheelDiag[key].current.toFixed(2)} A</div>
+              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Steer orient: {steerDiag[key].orientationDeg.toFixed(1)} deg</div>
+              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Steer curr: {steerDiag[key].current.toFixed(2)} A</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", height: "100%" }}>
+        <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
+          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Motor Enable / Disable</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+            {Object.keys(motorEnabled).map((motor) => (
+              <button
+                key={motor}
+                onClick={() => setMotorEnabled((prev) => ({ ...prev, [motor]: !prev[motor] }))}
+                style={{
+                  borderRadius: "8px",
+                  border: "1px solid #555",
+                  padding: "8px 6px",
+                  cursor: "pointer",
+                  background: motorEnabled[motor] ? "#1f7a1f" : "#7a1f1f",
+                  color: "white",
+                  fontSize: "11px",
+                  fontWeight: 800,
+                }}
+              >
+                {motor} {motorEnabled[motor] ? "EN" : "DIS"}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setMotorEnabled({
+              wheelFL: false, wheelFR: false, wheelRL: false, wheelRR: false,
+              steerFL: false, steerFR: false, steerRL: false, steerRR: false,
+            })}
+            style={{ marginTop: "10px", width: "100%", borderRadius: "8px", border: "1px solid #7a1f1f", background: "#8f1d1d", color: "white", padding: "10px", fontWeight: 900, cursor: "pointer" }}
+          >
+            Disable Motors (HARD SAFETY)
+          </button>
+        </div>
+
+        <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
+          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Safety + Stability</div>
+          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Front-to-back tilt: <b>{tilt.pitchDeg.toFixed(2)} deg</b></div>
+          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Left-to-right tilt: <b>{tilt.rollDeg.toFixed(2)} deg</b></div>
+          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>X-Y plane tilt magnitude: <b>{tilt.magnitudeDeg.toFixed(2)} deg</b></div>
+          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Tilt vector: <b>{tilt.vectorLabel}</b></div>
+          <div style={{ marginTop: "6px", fontSize: "12px", color: tiltWarning ? "#ff8080" : "#9df79d", fontWeight: 800 }}>
+            {tiltWarning ? "TILT WARNING ACTIVE" : "Tilt within safe range"}
+          </div>
+          <div style={{ marginTop: "6px", fontSize: "12px", color: "#d8d8d8" }}>Area of Safety</div>
+          <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#2a2a2a", border: "1px solid #444", overflow: "hidden" }}>
+            <div style={{ width: `${safetyPercent}%`, height: "100%", background: tiltWarning ? "#b91c1c" : "#15803d" }} />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", height: "100%" }}>
+        <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
+          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Status Indicators</div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            {["GREEN", "AMBER", "RED", "BLUE"].map((led) => (
+              <button
+                key={led}
+                onClick={() => setLedState(led)}
+                style={{
+                  flex: 1,
+                  minWidth: "72px",
+                  borderRadius: "8px",
+                  border: "1px solid #555",
+                  padding: "8px 6px",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  background: ledState === led ? "#6d1111" : "#2f2f2f",
+                  color: "white",
+                }}
+              >
+                {led}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: "8px", color: "#d8d8d8", fontSize: "12px" }}>Current LED: <span style={{ fontWeight: 800, color: "#fff" }}>{ledState}</span></div>
+          <button
+            onClick={() => setLaserWarningOn((prev) => !prev)}
+            style={{
+              marginTop: "8px",
+              width: "100%",
+              borderRadius: "8px",
+              border: "1px solid #555",
+              padding: "10px 8px",
+              fontSize: "13px",
+              fontWeight: 800,
+              cursor: "pointer",
+              background: laserWarningOn ? "#8f1d1d" : "#2f2f2f",
+              color: "white",
+            }}
+          >
+            {laserWarningOn ? "WARNING: LASER ON" : "Laser Warning Off"}
+          </button>
+          <div style={{ marginTop: "8px", fontSize: "12px", color: wheelFault ? "#ff8080" : "#9df79d", fontWeight: 800 }}>
+            {wheelFault ? "WHEEL FAULT LIGHT: ON" : "WHEEL FAULT LIGHT: OFF"}
+          </div>
+        </div>
+
+        <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
+          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Chassis Subcomponent Checks</div>
+          {systemChecks.map((check) => (
+            <div key={check.name} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #2d2d2d", fontSize: "12px" }}>
+              <span style={{ color: "#ddd" }}>{check.name}</span>
+              <span style={{ color: check.ok ? "#9df79d" : "#ff8080", fontWeight: 800 }}>{check.ok ? "PASS" : "CHECK"}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function PageContent({ selectedMode, selectedSubsystem, setSelectedSubsystem, selectedNavItem, setSelectedNavItem, sharedRos, setSharedRos }) {
+  if (selectedMode === "Simulation") {
+    return <Simulation selectedSubsystem={selectedSubsystem} />;
   }
-  else if (selectedMode === "Drone") {
-    return <Drone />;
+  else if (selectedMode === "Operator") {
+    return (
+      <div style={{ height: "100%", minHeight: 0 }}>
+        <Cameras selectedSubsystem={selectedSubsystem} setSelectedSubsystem={setSelectedSubsystem} />
+      </div>
+    );
   }
-  else if (selectedMode === "Sensors") {
+  else if (selectedMode === "Science Missions") {
     return <Sensors selectedSubsystem={selectedSubsystem} />;
   }
-  else if (selectedMode === "ROS2 Entities") {
-    return <ROS2Entities
-        selectedSubsystem={selectedSubsystem}
-        sharedRos={sharedRos}
-        setSharedRos={setSharedRos}
-      />;
+  else if (selectedMode === "Technician") {
+    return (
+      <div style={{ height: "100%", minHeight: 0 }}>
+        <TechnicianDashboard />
+      </div>
+    );
+  }
+  else if (selectedMode === "Drone") {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "12px", height: "100%", padding: "10px" }}>
+        <div style={{ minHeight: 0, border: "1px solid #333", borderRadius: "10px", overflow: "hidden" }}>
+          <OperationsWall pane="drone" />
+        </div>
+        <div style={{ minHeight: 0, border: "1px solid #333", borderRadius: "10px", overflow: "hidden" }}>
+          <MapView selectedSubsystem={selectedSubsystem} titleOverride="Drone: Map-View" />
+        </div>
+      </div>
+    );
   }
   else if (selectedMode === "Navigation") {
-    return <Navigation selectedNavItem={selectedNavItem} />;
-  }
-  else if (selectedMode === "Mission") {
-    return <Mission selectedSubsystem={selectedSubsystem} />;
+    return (
+      <div style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: "10px", minHeight: 0, height: "100%", padding: "10px" }}>
+        <div style={{ border: "1px solid #333", borderRadius: "10px", overflow: "hidden", background: "#1f1f1f" }}>
+          <SubsystemBar
+            buttons={NAVIGATION_BUTTONS}
+            selected={selectedNavItem}
+            setSelected={setSelectedNavItem}
+          />
+          <div style={{ padding: "8px" }}>
+            <Navigation selectedNavItem={selectedNavItem} />
+          </div>
+        </div>
+        <div style={{ border: "1px solid #333", borderRadius: "10px", overflow: "auto", background: "#1f1f1f" }}>
+          <ROS2Entities
+            selectedSubsystem={selectedSubsystem}
+            sharedRos={sharedRos}
+            setSharedRos={setSharedRos}
+          />
+        </div>
+      </div>
+    );
   }
 }
 function Simulation( {selectedSubsystem} ) {
@@ -206,8 +642,19 @@ function Simulation( {selectedSubsystem} ) {
   );
 }
 
-function Cameras({ selectedSubsystem }) {
+function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
   const [fullscreenCam, setFullscreenCam] = useState(null);
+  const [activeControlMode, setActiveControlMode] = useState("Drive Command");
+  const [fps, setFps] = useState(24);
+  const [streamPlaying, setStreamPlaying] = useState(true);
+  const [forcedFrameCount, setForcedFrameCount] = useState(0);
+  const [cameraRotateDeg, setCameraRotateDeg] = useState(0);
+  const [emergencyStop, setEmergencyStop] = useState(false);
+  const [armClampDistance, setArmClampDistance] = useState(35);
+  const [panoramaShots, setPanoramaShots] = useState(0);
+  const [sciencePhotos, setSciencePhotos] = useState(0);
+
+  const CONTROL_MODES = ["Drive Command", "Arm Command", "Science Command"];
 
   useEffect(() => {
     const handleKey = (e) => { if (e.key === "Escape") setFullscreenCam(null); };
@@ -215,57 +662,24 @@ function Cameras({ selectedSubsystem }) {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
-  // Reusable big camera card
-  const BigCameraCard = ({ camera, style = {} }) => (
+  const CameraCard = ({ camera }) => (
     <div
       onClick={() => setFullscreenCam(camera)}
       style={{
         background: "#2b2b2b",
-        borderRadius: "24px",
-        border: "2px solid #3d3d3d",
-        padding: "8px",
+        borderRadius: "10px",
+        border: "1px solid #3d3d3d",
+        padding: "5px",
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
-        ...style,
+        minHeight: 0,
+        height: "100%",
       }}
       onMouseEnter={(e) => e.currentTarget.style.borderColor = "#c90202"}
       onMouseLeave={(e) => e.currentTarget.style.borderColor = "#3d3d3d"}
     >
-      <h3 style={{ color: "white", fontSize: "12px", fontWeight: "bold", textAlign: "center", marginBottom: "4px" }}>
-        {camera.label}
-      </h3>
-      <img
-        src={`http://localhost:5000/camera/${camera.id}`}
-        alt={camera.label}
-        style={{
-          width: "100%",
-          flex: 1,
-          objectFit: "cover",
-          borderRadius: "20px",
-          background: "black",
-        }}
-      />
-    </div>
-  );
-
-  // Small camera card
-  const SmallCameraCard = ({ camera }) => (
-    <div
-      onClick={() => setFullscreenCam(camera)}
-      style={{
-        background: "#2b2b2b",
-        borderRadius: "12px",
-        border: "2px solid #3d3d3d",
-        padding: "6px",
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
-      }}
-      onMouseEnter={(e) => e.currentTarget.style.borderColor = "#c90202"}
-      onMouseLeave={(e) => e.currentTarget.style.borderColor = "#3d3d3d"}
-    >
-      <h4 style={{ color: "white", fontSize: "10px", fontWeight: "bold", textAlign: "center", marginBottom: "4px" }}>
+      <h4 style={{ color: "white", fontSize: "10px", fontWeight: "bold", textAlign: "center", marginBottom: "3px" }}>
         {camera.label}
       </h4>
       <img
@@ -275,14 +689,16 @@ function Cameras({ selectedSubsystem }) {
           width: "100%",
           flex: 1,
           objectFit: "cover",
-          borderRadius: "8px",
+          borderRadius: "6px",
           background: "black",
+          minHeight: 0,
+          transform: `rotate(${cameraRotateDeg}deg)`,
+          transformOrigin: "center center",
         }}
       />
     </div>
   );
 
-  // Fullscreen overlay component
   const FullscreenOverlay = () => fullscreenCam && (
     <div
       onClick={() => setFullscreenCam(null)}
@@ -301,9 +717,7 @@ function Cameras({ selectedSubsystem }) {
         padding: "20px",
       }}
     >
-      <h2 style={{ color: "white", fontSize: "24px", fontWeight: "bold", marginBottom: "16px" }}>
-        {fullscreenCam.label}
-      </h2>
+      <h2 style={{ color: "white", fontSize: "22px", fontWeight: "bold", marginBottom: "12px" }}>{fullscreenCam.label}</h2>
       <img
         src={`http://localhost:5000/camera/${fullscreenCam.id}`}
         alt={fullscreenCam.label}
@@ -313,15 +727,13 @@ function Cameras({ selectedSubsystem }) {
           objectFit: "contain",
           borderRadius: "12px",
           background: "black",
+          transform: `rotate(${cameraRotateDeg}deg)`,
+          transformOrigin: "center center",
         }}
       />
-      <p style={{ color: "#888", marginTop: "16px", fontSize: "14px" }}>
-        Click anywhere or press ESC to close
-      </p>
     </div>
   );
 
-  // ========== DRIVE CAMERAS LAYOUT ==========
   if (selectedSubsystem === "Drive") {
     const frontCamera = { label: "Front Camera", id: 15 };
     const backCamera = { label: "Back Camera", id: 16 };
@@ -337,146 +749,181 @@ function Cameras({ selectedSubsystem }) {
     ];
 
     return (
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gridTemplateRows: "1fr 1fr",
-        gap: "8px",
-        padding: "8px",
-        height: "calc(100vh - 145px)",
-        background: "#1a1a1a",
-      }}>
-        {/* Top Left - Front Camera (big) */}
-        <BigCameraCard camera={frontCamera} />
-
-        {/* Top Right - 2x2 Wheel Grid */}
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gridTemplateRows: "1fr 1fr",
-          gap: "6px",
-          background: "#2b2b2b",
-          borderRadius: "12px",
-          border: "2px solid #3d3d3d",
-          padding: "6px",
-        }}>
-          {wheelCameras.map((wheel) => (
-            <div
-              key={wheel.label}
-              style={{
-                background: "#1a1a1a",
-                borderRadius: "8px",
-                padding: "4px",
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
-              <h4 style={{ color: "white", fontSize: "9px", fontWeight: "bold", textAlign: "center", marginBottom: "2px" }}>
-                {wheel.label}
-              </h4>
-              <div style={{ display: "flex", gap: "4px", flex: 1 }}>
-                {wheel.cams.map((camId) => (
-                  <img
-                    key={camId}
-                    src={`http://localhost:5000/camera/${camId}`}
-                    alt={`Camera ${camId}`}
-                    onClick={() => setFullscreenCam({ label: `${wheel.label} - Cam ${camId}`, id: camId })}
-                    style={{
-                      flex: 1,
-                      objectFit: "cover",
-                      borderRadius: "4px",
-                      background: "black",
-                      cursor: "pointer",
-                      border: "1px solid #3d3d3d",
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.borderColor = "#c90202"}
-                    onMouseLeave={(e) => e.currentTarget.style.borderColor = "#3d3d3d"}
-                  />
-                ))}
-              </div>
+      <div style={{ display: "grid", gridTemplateRows: "auto auto minmax(0, 1fr)", gap: "8px", padding: "8px", minHeight: 0, height: "100%", background: "#1a1a1a" }}>
+        {/* Top controls: 2 panels side by side, auto height */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+          <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
+            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Control State + Safety</div>
+            <div style={{ fontSize: "12px", color: "#e8e8e8", marginBottom: "6px" }}>Active Mode: <b>{activeControlMode}</b></div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "6px" }}>
+              {CONTROL_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setActiveControlMode(mode)}
+                  style={{ border: "1px solid #555", borderRadius: "999px", padding: "4px 8px", fontSize: "11px", cursor: "pointer", background: activeControlMode === mode ? "#7c1919" : "#303030", color: "white", fontWeight: 700 }}
+                >
+                  {mode}
+                </button>
+              ))}
             </div>
-          ))}
+            <button
+              onClick={() => setEmergencyStop((prev) => !prev)}
+              style={{ width: "100%", borderRadius: "8px", border: "1px solid #803737", padding: "7px", cursor: "pointer", background: emergencyStop ? "#a31616" : "#3a3a3a", color: "white", fontWeight: 900 }}
+            >
+              {emergencyStop ? "EMERGENCY STOP ACTIVE" : "Emergency Stop"}
+            </button>
+          </div>
+
+          <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
+            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Vision + Stream Control</div>
+            <div style={{ display: "grid", gridTemplateColumns: "auto auto auto 1fr", gap: "6px", alignItems: "center" }}>
+              <button onClick={() => setFps((p) => Math.max(1, p - 1))} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer" }}>-</button>
+              <div style={{ fontSize: "12px", color: "white", textAlign: "center" }}>{fps} FPS</div>
+              <button onClick={() => setFps((p) => Math.min(60, p + 1))} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer" }}>+</button>
+              <button onClick={() => setForcedFrameCount((n) => n + 1)} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", fontSize: "11px" }}>Force Frame</button>
+            </div>
+            <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+              <button onClick={() => setStreamPlaying(true)} style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: streamPlaying ? "#1f7a1f" : "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}>Play</button>
+              <button onClick={() => setStreamPlaying(false)} style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: !streamPlaying ? "#7a1f1f" : "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}>Stop</button>
+            </div>
+            <div style={{ fontSize: "11px", color: "#bbb", marginTop: "5px" }}>Forced frames: {forcedFrameCount}</div>
+          </div>
         </div>
 
-        {/* Bottom Left - Back Camera (big) */}
-        <BigCameraCard camera={backCamera} />
-
-        {/* Bottom Right - 1x2 Side Views */}
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "6px",
-          background: "#2b2b2b",
-          borderRadius: "12px",
-          border: "2px solid #3d3d3d",
-          padding: "6px",
-        }}>
-          {sideViews.map((side) => (
-            <SmallCameraCard key={side.label} camera={side} />
-          ))}
+        {/* Action strip: rotate + view switcher (replaces fixed sidebar) */}
+        <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px 12px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "11px", color: "#ddd", fontWeight: 800 }}>Rotate:</span>
+          <button onClick={() => setCameraRotateDeg((d) => (d - 90 + 360) % 360)} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>-90°</button>
+          <button onClick={() => setCameraRotateDeg((d) => (d + 90) % 360)} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>+90°</button>
+          <button onClick={() => setCameraRotateDeg(0)} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Reset</button>
+          <div style={{ width: "1px", height: "18px", background: "#4a4a4a" }} />
+          <span style={{ fontSize: "11px", color: "#ddd", fontWeight: 800 }}>View:</span>
+          <button onClick={() => setSelectedSubsystem?.("Drive")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Drive" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Drive</button>
+          <button onClick={() => setSelectedSubsystem?.("Arm")} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Arm</button>
+          <button onClick={() => setSelectedSubsystem?.("Science")} style={{ borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Science</button>
         </div>
 
+        {/* Camera grid: portrait layout — front (top), wheels 2×2 (middle), back+sides (bottom) */}
+        <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr)", gap: "6px", minHeight: 0, height: "100%" }}>
+          <CameraCard camera={frontCamera} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr", gap: "6px", minHeight: 0 }}>
+            {wheelCameras.map((wheel) => (
+              <div key={wheel.label} style={{ background: "#2b2b2b", borderRadius: "10px", border: "1px solid #3d3d3d", padding: "4px", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                <div style={{ color: "white", fontSize: "8px", fontWeight: 700, textAlign: "center", marginBottom: "2px" }}>{wheel.label}</div>
+                <div style={{ display: "flex", gap: "3px", flex: 1, minHeight: 0 }}>
+                  {wheel.cams.map((camId) => (
+                    <img
+                      key={camId}
+                      src={`http://localhost:5000/camera/${camId}`}
+                      alt={`Camera ${camId}`}
+                      onClick={() => setFullscreenCam({ label: `${wheel.label} - Cam ${camId}`, id: camId })}
+                      style={{ flex: 1, objectFit: "cover", borderRadius: "4px", background: "black", cursor: "pointer", border: "1px solid #3d3d3d" }}
+                      onMouseEnter={(e) => e.currentTarget.style.borderColor = "#c90202"}
+                      onMouseLeave={(e) => e.currentTarget.style.borderColor = "#3d3d3d"}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px", minHeight: 0 }}>
+            <CameraCard camera={backCamera} />
+            {sideViews.map((side) => <CameraCard key={side.label} camera={side} />)}
+          </div>
+        </div>
         <FullscreenOverlay />
       </div>
     );
   }
 
-  // ========== ARM CAMERAS LAYOUT ==========
   if (selectedSubsystem === "Arm") {
-    const baseCamera = { label: "Base of Arm", id: 8 };
-    const endEffectorCamera = { label: "End Effector", id: 10 };
-    const jointCamera = { label: "Joint of Arm", id: 9 };
-    const gripperCamera = { label: "Gripper Cam", id: 11 };
+    const armCameras = [
+      { label: "Base Arm", id: 8 },
+      { label: "Joint", id: 9 },
+      { label: "End Effector", id: 10 },
+      { label: "Gripper", id: 11 },
+    ];
 
     return (
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "1.2fr 1fr",
-        gridTemplateRows: "1fr 1fr",
-        gap: "8px",
-        padding: "8px",
-        height: "calc(100vh - 145px)",
-        background: "#1a1a1a",
-      }}>
-        {/* Top Left - Big view (Base of Arm) */}
-        <BigCameraCard camera={baseCamera} />
-
-        {/* Top Right - Medium view (Joint) */}
-        <SmallCameraCard camera={jointCamera} />
-
-        {/* Bottom Left - Big view (End Effector) */}
-        <BigCameraCard camera={endEffectorCamera} />
-
-        {/* Bottom Right - Medium view (Gripper) */}
-        <SmallCameraCard camera={gripperCamera} />
-
+      <div style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: "8px", padding: "8px", height: "100%", minHeight: 0, background: "#1a1a1a" }}>
+        {/* Control row: 2 panels side by side, auto height */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+          <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
+            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Arm Control + Safety</div>
+            <div style={{ fontSize: "12px", color: "#e8e8e8", marginBottom: "6px" }}>Active Mode: <b>{activeControlMode}</b></div>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              {CONTROL_MODES.map((mode) => (
+                <button key={mode} onClick={() => setActiveControlMode(mode)} style={{ border: "1px solid #555", borderRadius: "999px", padding: "4px 8px", fontSize: "11px", cursor: "pointer", background: activeControlMode === mode ? "#7c1919" : "#303030", color: "white", fontWeight: 700 }}>{mode}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div>
+              <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "4px", fontWeight: 800 }}>Clamp Distance to Fully Close</div>
+              <input type="range" min={0} max={100} value={armClampDistance} onChange={(e) => setArmClampDistance(Number(e.target.value))} style={{ width: "100%" }} />
+              <div style={{ color: "white", fontSize: "12px" }}>{armClampDistance}%</div>
+            </div>
+            <button onClick={() => setEmergencyStop((prev) => !prev)} style={{ borderRadius: "8px", border: "1px solid #803737", padding: "8px 10px", cursor: "pointer", background: emergencyStop ? "#a31616" : "#3a3a3a", color: "white", fontWeight: 900 }}>
+              {emergencyStop ? "E-STOP ON" : "Emergency Stop"}
+            </button>
+          </div>
+        </div>
+        {/* Cameras: 2×2 grid for portrait */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr", gap: "6px", minHeight: 0 }}>
+          {armCameras.map((cam) => <CameraCard key={cam.label} camera={cam} />)}
+        </div>
         <FullscreenOverlay />
       </div>
     );
   }
 
-  // ========== SCIENCE CAMERAS LAYOUT ==========
   if (selectedSubsystem === "Science") {
-    const scienceCams = [
+    const scienceCameras = [
       { label: "Science Cam 1", id: 12 },
       { label: "Science Cam 2", id: 13 },
       { label: "Science Cam 3", id: 14 },
     ];
 
-    return (
-      <div style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        padding: "8px",
-        height: "calc(100vh - 145px)",
-        background: "#1a1a1a",
-      }}>
-        {/* Science cams stacked vertically */}
-        {scienceCams.map((cam) => (
-          <BigCameraCard key={cam.label} camera={cam} style={{ flex: 1 }} />
-        ))}
+    const graphBar = (value, color) => (
+      <div style={{ height: "8px", background: "#252525", borderRadius: "999px", overflow: "hidden" }}>
+        <div style={{ width: `${value}%`, height: "100%", background: color }} />
+      </div>
+    );
 
+    return (
+      <div style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: "8px", padding: "8px", height: "100%", minHeight: 0, background: "#1a1a1a" }}>
+        {/* Control row: 2 panels side by side, auto height */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+          <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
+            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Science Imaging / Capture</div>
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button onClick={() => setPanoramaShots((n) => n + 1)} style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}>Panorama</button>
+              <button onClick={() => setSciencePhotos((n) => n + 1)} style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}>Take Picture</button>
+            </div>
+            <div style={{ marginTop: "6px", color: "#ddd", fontSize: "11px" }}>
+              Panoramas: {panoramaShots} | Photos: {sciencePhotos}
+            </div>
+          </div>
+          <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
+            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Science Data Graphs</div>
+            <div style={{ display: "grid", gap: "6px" }}>
+              <div style={{ fontSize: "10px", color: "#cfcfcf" }}>Soil Moisture</div>
+              {graphBar(72, "#16a34a")}
+              <div style={{ fontSize: "10px", color: "#cfcfcf" }}>Spectral Intensity</div>
+              {graphBar(48, "#2563eb")}
+              <div style={{ fontSize: "10px", color: "#cfcfcf" }}>Thermal Delta</div>
+              {graphBar(35, "#f97316")}
+            </div>
+          </div>
+        </div>
+        {/* Cameras: portrait layout — Cam1 full width on top, Cam2+Cam3 side by side below */}
+        <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) minmax(0, 1fr)", gap: "6px", minHeight: 0 }}>
+          <CameraCard camera={scienceCameras[0]} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", minHeight: 0 }}>
+            <CameraCard camera={scienceCameras[1]} />
+            <CameraCard camera={scienceCameras[2]} />
+          </div>
+        </div>
         <FullscreenOverlay />
       </div>
     );
@@ -493,76 +940,186 @@ function Sensors( {selectedSubsystem} ) {
   );
 }
 
-function ROS2Entities( {selectedSubsystem} ) {
-  const map = new Map();
-  const ros = new ROSLIB.Ros({ url: getRosbridgeUrl() });
-  const subscription_topics = [""];
-  const subscription_msg_type = [""];
-  const publisher_topics = [""];
-  const publisher_msg_type = [""];
+function ROS2Entities({ selectedSubsystem, sharedRos, setSharedRos }) {
+  const TOPIC_CONFIG = [
+    { name: "/joint_states", type: "sensor_msgs/msg/JointState", subsystem: "Arm", canSubscribe: true, canPublish: false },
+    { name: "/controller_input", type: "sensor_msgs/msg/Joy", subsystem: "Arm", canSubscribe: true, canPublish: false },
+    { name: "/can_tx", type: "umdloop_theseus_can_messages/msg/CANA", subsystem: "Arm", canSubscribe: true, canPublish: false },
+    { name: "/can_rx", type: "umdloop_theseus_can_messages/msg/CANA", subsystem: "Arm", canSubscribe: true, canPublish: false },
+    { name: "/cmd_vel", type: "geometry_msgs/msg/Twist", subsystem: "Drive", canSubscribe: true, canPublish: true },
+    { name: "/odom", type: "nav_msgs/msg/Odometry", subsystem: "Drive", canSubscribe: true, canPublish: false },
+    { name: "/velocity_controller/commands", type: "std_msgs/msg/Float64MultiArray", subsystem: "Arm", canSubscribe: false, canPublish: true },
+  ];
 
-  if(selectedSubsystem === "Arm") {
-    const subscription_topics = ["/joint_states", "/controller_input", "/can_tx", "/can_rx"];
-    const subscription_msg_type = ["sensor_msgs/msg/JointState", "sensor_msgs/msg/Joy", "umdloop_theseus_can_messages/msg/CANA", "umdloop_theseus_can_messages/msg/CANA"];
-    const publisher_topics = ["/velocity_controller/commands"];
-    const publisher_msg_type = ["std_msgs/msg/Float64MultiArray"];
-  } else if (selectedSubsystem === "Drive") {
-    const subscription_topics = ["/cmd_vel", "/odom"];
-    const subscription_msg_type = ["geometry_msgs/msg/Twist", "nav_msgs/msg/Odometry"];
-    const publisher_topics = ["/cmd_vel"];
-    const publisher_msg_type = ["geometry_msgs/msg/Twist"];
-  } else if (selectedSubsystem === "Science") {
-    const subscription_topics = [""];
-    const subscription_msg_type = [""];
-    const publisher_topics = [""];
-    const publisher_msg_type = [""];
-  }
+  const PUBLISH_TOPICS = TOPIC_CONFIG.filter((t) => t.canPublish);
+  const SUBSCRIBE_TOPICS = TOPIC_CONFIG.filter((t) => t.canSubscribe);
+  const typeByTopic = TOPIC_CONFIG.reduce((acc, topic) => {
+    acc[topic.name] = topic.type;
+    return acc;
+  }, {});
 
-  for (let i = 0; i < subscription_topics.length; i++) {
-    map.set(subscription_topics[i], subscription_msg_type[i]);
-  }
+  const [rosStatus, setRosStatus] = useState("connecting...");
+  const [rosInstance, setRosInstance] = useState(null);
+  const [messageLog, setMessageLog] = useState([]);
+  const [pubTopic, setPubTopic] = useState(PUBLISH_TOPICS[0].name);
+  const [pubMessageType, setPubMessageType] = useState(PUBLISH_TOPICS[0].type);
+  const [publishStatus, setPublishStatus] = useState("");
+  const [pubPayload, setPubPayload] = useState('{\n  "linear": {"x": 0.0, "y": 0.0, "z": 0.0},\n  "angular": {"x": 0.0, "y": 0.0, "z": 0.0}\n}');
 
-  var ros_connection_status = "connecting...";
+  useEffect(() => {
+    const ros = sharedRos || new ROSLIB.Ros({ url: getRosbridgeUrl() });
+    const createdHere = !sharedRos;
 
-  // When the Rosbridge server connects, fill the span with id "status" with "successful"
-  ros.on("connection", () => {
-    ros_connection_status = "successful";
-  });
+    if (createdHere && setSharedRos) {
+      setSharedRos(ros);
+    }
+    setRosInstance(ros);
 
-  // When the Rosbridge server experiences an error, fill the "status" span with the returned error
-  ros.on("error", (error) => {
-    ros_connection_status = `errored out (${error})`;
-  });
+    ros.on("connection", () => setRosStatus("connected"));
+    ros.on("error", (error) => setRosStatus(`error: ${error?.toString?.() || error}`));
+    ros.on("close", () => setRosStatus("closed"));
 
-  // When the Rosbridge server shuts down, fill the "status" span with "closed"
-  ros.on("close", () => {
-    ros_connection_status = "closed";
-  });
+    const listeners = SUBSCRIBE_TOPICS.map((topic) => {
+      const listener = new ROSLIB.Topic({
+        ros,
+        name: topic.name,
+        messageType: topic.type,
+      });
 
+      listener.subscribe((message) => {
+        const rendered = JSON.stringify(message, null, 2);
+        setMessageLog((prev) => [
+          {
+            topic: topic.name,
+            type: topic.type,
+            subsystem: topic.subsystem,
+            timestamp: new Date().toLocaleTimeString(),
+            payload: rendered,
+          },
+          ...prev.slice(0, 199),
+        ]);
+      });
 
-  // Create a listeners for each topic in subscription_topics
-  subscription_topics.forEach((topic, index) => {
-    const listeners = new ROSLIB.Topic({
-      ros,
-      name: topic,
-      messageType: subscription_msg_type[index],
+      return listener;
     });
 
-    // When we receive a message on /my_topic, add its data as a list item to the "messages" ul
-    listeners.subscribe((message) => {
-      const ul = document.getElementById("messages");
-      const newMessage = document.createElement("li");
-      newMessage.appendChild(document.createTextNode(message.data));
-      ul.appendChild(newMessage);
-    });
-  });
+    return () => {
+      listeners.forEach((listener) => listener.unsubscribe());
+      if (createdHere) {
+        ros.close();
+      }
+    };
+  }, [setSharedRos, sharedRos]);
 
+  const loadTemplate = (topicName) => {
+    if (topicName === "/cmd_vel") {
+      setPubPayload('{\n  "linear": {"x": 0.2, "y": 0.0, "z": 0.0},\n  "angular": {"x": 0.0, "y": 0.0, "z": 0.0}\n}');
+      return;
+    }
+    if (topicName === "/velocity_controller/commands") {
+      setPubPayload('{\n  "data": [0.0, 0.0, 0.0, 0.0]\n}');
+      return;
+    }
+    setPubPayload("{}");
+  };
 
+  const onTopicChange = (topicName) => {
+    setPubTopic(topicName);
+    setPubMessageType(typeByTopic[topicName] || "");
+    loadTemplate(topicName);
+  };
+
+  const publishMessage = () => {
+    if (!rosInstance) {
+      setPublishStatus("Cannot publish: ROS not connected");
+      return;
+    }
+
+    try {
+      const parsedMessage = JSON.parse(pubPayload);
+      const topic = new ROSLIB.Topic({
+        ros: rosInstance,
+        name: pubTopic,
+        messageType: pubMessageType,
+      });
+      topic.publish(new ROSLIB.Message(parsedMessage));
+      setPublishStatus(`Published to ${pubTopic}`);
+      setTimeout(() => setPublishStatus(""), 3000);
+    } catch (error) {
+      setPublishStatus(`Publish failed: ${error.message}`);
+    }
+  };
 
   return (
-    <div style={{ padding: "20px" }}>
+    <div style={{ padding: "20px", color: "white" }}>
       <h1>{selectedSubsystem} - ROS2 Entities Mode</h1>
-      <p>Connection status: <span id="status">{ros_connection_status}</span></p>
+      <p style={{ marginTop: "8px" }}>Connection status: {rosStatus}</p>
+      <p style={{ marginTop: "6px", opacity: 0.85 }}>
+        Subscribed topics: {SUBSCRIBE_TOPICS.length} | Publishable topics: {PUBLISH_TOPICS.length}
+      </p>
+
+      <div style={{ marginTop: "16px", display: "grid", gridTemplateColumns: "1fr 1.2fr", gap: "16px" }}>
+        <div style={{ background: "#2b2b2b", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "14px" }}>
+          <h3 style={{ marginTop: 0 }}>Publish</h3>
+
+          <label style={{ display: "block", marginBottom: "8px", fontWeight: 700 }}>Topic</label>
+          <select
+            value={pubTopic}
+            onChange={(e) => onTopicChange(e.target.value)}
+            style={{ width: "100%", marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "#1e1e1e", color: "white", border: "1px solid #4a4a4a" }}
+          >
+            {PUBLISH_TOPICS.map((topic) => (
+              <option key={topic.name} value={topic.name}>
+                {topic.name} ({topic.subsystem})
+              </option>
+            ))}
+          </select>
+
+          <label style={{ display: "block", marginBottom: "8px", fontWeight: 700 }}>Message Type</label>
+          <input
+            value={pubMessageType}
+            onChange={(e) => setPubMessageType(e.target.value)}
+            style={{ width: "100%", marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "#1e1e1e", color: "white", border: "1px solid #4a4a4a" }}
+          />
+
+          <label style={{ display: "block", marginBottom: "8px", fontWeight: 700 }}>JSON Payload</label>
+          <textarea
+            value={pubPayload}
+            onChange={(e) => setPubPayload(e.target.value)}
+            rows={10}
+            style={{ width: "100%", marginBottom: "10px", padding: "8px", borderRadius: "6px", background: "#101010", color: "#d4d4d4", border: "1px solid #4a4a4a", fontFamily: "Consolas, monospace" }}
+          />
+
+          <button
+            onClick={publishMessage}
+            style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #175f17", background: "#228b22", color: "white", fontWeight: 700, cursor: "pointer" }}
+          >
+            Publish Message
+          </button>
+
+          {publishStatus && <p style={{ marginTop: "8px" }}>{publishStatus}</p>}
+        </div>
+
+        <div style={{ background: "#2b2b2b", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "14px" }}>
+          <h3 style={{ marginTop: 0 }}>Received Messages (All Listed Topics)</h3>
+          <div style={{ maxHeight: "520px", overflowY: "auto", background: "#101010", borderRadius: "8px", padding: "10px", border: "1px solid #444" }}>
+            {messageLog.length === 0 ? (
+              <p style={{ margin: 0, color: "#aaa" }}>No messages received yet.</p>
+            ) : (
+              messageLog.map((entry, idx) => (
+                <div key={`${entry.topic}-${entry.timestamp}-${idx}`} style={{ marginBottom: "12px", paddingBottom: "10px", borderBottom: "1px solid #2f2f2f" }}>
+                  <div style={{ fontSize: "12px", color: "#9cc4ff", marginBottom: "4px" }}>
+                    {entry.timestamp} | {entry.subsystem} | {entry.topic} ({entry.type})
+                  </div>
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#d4ffd4", fontSize: "12px" }}>
+                    {entry.payload}
+                  </pre>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -883,14 +1440,6 @@ function Navigation({selectedNavItem}) {
   );
   }
 
-function Mission( {selectedSubsystem} ) {
-  return (
-    <div style={{ padding: "20px" }}>
-      <h1>{selectedSubsystem} - Mission Mode</h1>
-    </div>
-  );
-}
-
 export default function LoopGui() {
   console.log("🔥 LOOP GUI RENDERED");
   const [selectedMode, setSelectedMode] = useState(modes[0]);
@@ -898,36 +1447,28 @@ export default function LoopGui() {
   const [selectedNavItem, setSelectedNavItem] = useState(NAVIGATION_BUTTONS[0]);
   const [sharedRos, setSharedRos] = useState(null);
 
-  // Determine which buttons to show based on mode
-  const showSubsystemBar = true; // Always show subsystem bar
+  const showSubsystemBar = selectedMode !== "Navigation" && selectedMode !== "Drone" && selectedMode !== "Technician";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "#1a1a1a" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden", background: "#1a1a1a" }}>
       {/* Top Navigation Bar */}
       <NavigationBar selectedMode={selectedMode} setSelectedMode={setSelectedMode} />
 
       {/* Subsystem Bar (horizontal) - only show when not in Cameras mode */}
       {showSubsystemBar && (
-        selectedMode === "Navigation" ? (
-          <SubsystemBar
-            buttons={NAVIGATION_BUTTONS}
-            selected={selectedNavItem}
-            setSelected={setSelectedNavItem}
-          />
-        ) : (
-          <SubsystemBar
-            buttons={subsystems}
-            selected={selectedSubsystem}
-            setSelected={setSelectedSubsystem}
-          />
-        )
+        <SubsystemBar
+          buttons={subsystems}
+          selected={selectedSubsystem}
+          setSelected={setSelectedSubsystem}
+        />
       )}
 
       {/* Main Content Area - full width for vertical monitors */}
-      <div style={{ flex: 1, overflow: "hidden" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: selectedMode === "Navigation" || selectedMode === "Technician" ? "auto" : "hidden" }}>
         <PageContent
           selectedMode={selectedMode}
           selectedSubsystem={selectedSubsystem}
+          setSelectedSubsystem={setSelectedSubsystem}
           selectedNavItem={selectedNavItem}
           setSelectedNavItem={setSelectedNavItem}
           sharedRos={sharedRos}
