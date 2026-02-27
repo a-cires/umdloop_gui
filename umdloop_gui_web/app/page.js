@@ -8,8 +8,8 @@ import MapView from "./MapView";
 import OperationsWall from "./OperationsWall";
 import { getRosbridgeUrl } from "./config";
 
-export const modes = ["Simulation", "Operator", "Science Missions", "Technician", "Drone", "Navigation"];
-export const icons = ["simulation.png", "camera.png", "sensor.png", "sensor.png", "camera.png", "navigation.png"];
+export const modes = ["Operator", "Technician", "Drone", "Navigation"];
+export const icons = ["camera.png", "sensor.png", "camera.png", "navigation.png"];
 export const subsystems = ["Drive", "Arm", "Science"];
 
 function NavigationBar( {selectedMode, setSelectedMode} ) {
@@ -183,6 +183,7 @@ function TechnicianDashboard() {
   const [timerRunning, setTimerRunning] = useState(false);
   const [ledState, setLedState] = useState("GREEN");
   const [laserWarningOn, setLaserWarningOn] = useState(false);
+  const [showCanPopup, setShowCanPopup] = useState(false);
   const [rosStatus, setRosStatus] = useState("connecting...");
   const [bytesPerSecond, setBytesPerSecond] = useState(0);
   const [roverVelocityMps, setRoverVelocityMps] = useState(0);
@@ -231,6 +232,14 @@ function TechnicianDashboard() {
     }, 1000);
     return () => clearInterval(id);
   }, [timerRunning]);
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === "Escape") setShowCanPopup(false);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
 
   useEffect(() => {
     const ros = new ROSLIB.Ros({ url: getRosbridgeUrl() });
@@ -391,6 +400,13 @@ function TechnicianDashboard() {
   const tiltWarning = tilt.magnitudeDeg > 12;
   const safetyPercent = Math.max(0, Math.min(100, (tilt.magnitudeDeg / 15) * 100));
   const wheelFault = Object.values(wheelDiag).some((wheel) => Math.abs(wheel.current) > 18);
+  const canConnections = [
+    { name: "CAN0 Main Bus", percent: rosStatus === "connected" ? 97 : rosStatus === "connecting..." ? 52 : 8, detail: rosStatus === "connected" ? "Heartbeat active" : "ROS bridge not fully established" },
+    { name: "CAN1 Arm Bus", percent: Math.max(5, Math.min(100, Math.round(radioLevel))), detail: `Radio-derived quality ${radioLevel.toFixed(0)}%` },
+    { name: "CAN2 Mobility Bus", percent: Math.max(10, Math.min(100, Math.round((bytesPerSecond / 1400) * 100))), detail: `Telemetry rate ${bytesPerSecond.toFixed(0)} B/s` },
+    { name: "CAN3 Instrument Bus", percent: 61, detail: "Science instrument link initialized" },
+    { name: "CAN4 Aux Bus", percent: 89, detail: "Aux power and lighting nominal" },
+  ];
 
   const systemChecks = [
     { name: "ROS Link", ok: rosStatus === "connected" },
@@ -415,50 +431,56 @@ function TechnicianDashboard() {
       }}
     >
       <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
-        <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "6px" }}>Mission Clock</div>
+        <div style={{ fontSize: "20px", color: "#cfcfcf", marginBottom: "8px", fontWeight: 800 }}>Mission Clock</div>
         <div style={{ fontSize: "28px", fontWeight: 900, color: "white", letterSpacing: "1px" }}>{hours}:{minutes}:{seconds}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "6px", marginTop: "10px" }}>
-          <input value={setHours} onChange={(e) => setSetHours(e.target.value)} placeholder="HH" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white" }} />
-          <input value={setMinutes} onChange={(e) => setSetMinutes(e.target.value)} placeholder="MM" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white" }} />
-          <input value={setSeconds} onChange={(e) => setSetSeconds(e.target.value)} placeholder="SS" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white" }} />
-          <button onClick={applyTimer} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #5a5a5a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer" }}>Set</button>
+          <input value={setHours} onChange={(e) => setSetHours(e.target.value)} placeholder="HH" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white", fontSize: "18px", fontWeight: 700 }} />
+          <input value={setMinutes} onChange={(e) => setSetMinutes(e.target.value)} placeholder="MM" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white", fontSize: "18px", fontWeight: 700 }} />
+          <input value={setSeconds} onChange={(e) => setSetSeconds(e.target.value)} placeholder="SS" style={{ padding: "6px", borderRadius: "6px", border: "1px solid #555", background: "#2a2a2a", color: "white", fontSize: "18px", fontWeight: 700 }} />
+          <button onClick={applyTimer} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #5a5a5a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer", fontSize: "18px" }}>Set</button>
         </div>
         <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
-          <button onClick={() => setTimerRunning(true)} disabled={remainingSeconds <= 0} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #2f6b2f", background: remainingSeconds > 0 ? "#1f7a1f" : "#3a3a3a", color: "white", fontWeight: 700, cursor: remainingSeconds > 0 ? "pointer" : "not-allowed" }}>Start</button>
-          <button onClick={() => setTimerRunning(false)} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #6a6a6a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer" }}>Pause</button>
-          <button onClick={() => { setTimerRunning(false); setRemainingSeconds(configuredSeconds); }} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #6a6a6a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer" }}>Reset</button>
+          <button onClick={() => setTimerRunning(true)} disabled={remainingSeconds <= 0} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #2f6b2f", background: remainingSeconds > 0 ? "#1f7a1f" : "#3a3a3a", color: "white", fontWeight: 700, cursor: remainingSeconds > 0 ? "pointer" : "not-allowed", fontSize: "18px" }}>Start</button>
+          <button onClick={() => setTimerRunning(false)} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #6a6a6a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer", fontSize: "18px" }}>Pause</button>
+          <button onClick={() => { setTimerRunning(false); setRemainingSeconds(configuredSeconds); }} style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #6a6a6a", background: "#3a3a3a", color: "white", fontWeight: 700, cursor: "pointer", fontSize: "18px" }}>Reset</button>
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", alignItems: "stretch", height: "100%" }}>
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "16px", minHeight: "220px" }}>
-          <div style={{ fontSize: "14px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Power / Environment</div>
-          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "4px" }}>Battery Drive: <b>{powerStats.batteryDrive.toFixed(1)}%</b></div>
-          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "4px" }}>Battery Arm: <b>{powerStats.batteryArm.toFixed(1)}%</b></div>
-          <div style={{ marginTop: 10, fontSize: "13px", color: "#d8d8d8", marginBottom: "4px" }}>Temps:</div>
+          <div style={{ fontSize: "26px", color: "#ffffff", marginBottom: "12px", fontWeight: 900, letterSpacing: "0.5px" }}>Power / Environment</div>
+          <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Battery Drive: <b>{powerStats.batteryDrive.toFixed(1)}%</b></div>
+          <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Battery Arm: <b>{powerStats.batteryArm.toFixed(1)}%</b></div>
+          <div style={{ marginTop: 10, fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Temps:</div>
           {Object.entries(sensorTemps).map(([k, v]) => (
-            <div key={k} style={{ fontSize: "13px", color: "#efefef", marginBottom: "3px" }}>{k}: {v.toFixed(1)} C</div>
+            <div key={k} style={{ fontSize: "19px", color: "#efefef", marginBottom: "4px" }}>{k}: {v.toFixed(1)} C</div>
           ))}
         </div>
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "16px", minHeight: "220px" }}>
-          <div style={{ fontSize: "14px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Comms / Link Health</div>
-          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>ROS Link: <b>{rosStatus}</b></div>
-          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>Radio Connectivity: <b>{radioLevel.toFixed(0)}%</b></div>
-          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>Info Rate: <b>{bytesPerSecond.toFixed(0)} B/s</b></div>
-          <div style={{ fontSize: "13px", color: "#d8d8d8", marginBottom: "6px" }}>Rover Velocity (telemetry): <b>{roverVelocityMps.toFixed(2)} m/s</b></div>
+          <div style={{ fontSize: "26px", color: "#ffffff", marginBottom: "12px", fontWeight: 900, letterSpacing: "0.5px" }}>Comms / Link Health</div>
+          <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>ROS Link: <b>{rosStatus}</b></div>
+          <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Radio Connectivity: <b>{radioLevel.toFixed(0)}%</b></div>
+          <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Info Rate: <b>{bytesPerSecond.toFixed(0)} B/s</b></div>
+          <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Rover Velocity (telemetry): <b>{roverVelocityMps.toFixed(2)} m/s</b></div>
+          <button
+            onClick={() => setShowCanPopup(true)}
+            style={{ marginTop: "8px", width: "100%", borderRadius: "8px", border: "1px solid #4f4f4f", background: "#2b2b2b", color: "white", padding: "10px 12px", fontSize: "18px", fontWeight: 800, cursor: "pointer" }}
+          >
+            View CAN Connections
+          </button>
         </div>
       </div>
 
       <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px", height: "100%" }}>
-        <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Mobility Diagnostics (Wheel + Steering)</div>
+        <div style={{ fontSize: "26px", color: "#ffffff", marginBottom: "12px", fontWeight: 900, letterSpacing: "0.5px" }}>Mobility Diagnostics (Wheel + Steering)</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
           {["fl", "fr", "rl", "rr"].map((key) => (
             <div key={key} style={{ background: "#2a2a2a", border: "1px solid #3f3f3f", borderRadius: "8px", padding: "8px" }}>
-              <div style={{ fontWeight: 800, color: "white", fontSize: "12px", marginBottom: "4px" }}>{key.toUpperCase()}</div>
-              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Wheel vel: {wheelDiag[key].velocity.toFixed(2)} rad/s</div>
-              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Wheel curr: {wheelDiag[key].current.toFixed(2)} A</div>
-              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Steer orient: {steerDiag[key].orientationDeg.toFixed(1)} deg</div>
-              <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Steer curr: {steerDiag[key].current.toFixed(2)} A</div>
+              <div style={{ fontWeight: 800, color: "white", fontSize: "18px", marginBottom: "6px" }}>{key.toUpperCase()}</div>
+              <div style={{ fontSize: "18px", color: "#d8d8d8" }}>Wheel vel: {wheelDiag[key].velocity.toFixed(2)} rad/s</div>
+              <div style={{ fontSize: "18px", color: "#d8d8d8" }}>Wheel curr: {wheelDiag[key].current.toFixed(2)} A</div>
+              <div style={{ fontSize: "18px", color: "#d8d8d8" }}>Steer orient: {steerDiag[key].orientationDeg.toFixed(1)} deg</div>
+              <div style={{ fontSize: "18px", color: "#d8d8d8" }}>Steer curr: {steerDiag[key].current.toFixed(2)} A</div>
             </div>
           ))}
         </div>
@@ -466,7 +488,7 @@ function TechnicianDashboard() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", height: "100%" }}>
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
-          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Motor Enable / Disable</div>
+          <div style={{ fontSize: "20px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Motor Enable / Disable</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
             {Object.keys(motorEnabled).map((motor) => (
               <button
@@ -479,7 +501,7 @@ function TechnicianDashboard() {
                   cursor: "pointer",
                   background: motorEnabled[motor] ? "#1f7a1f" : "#7a1f1f",
                   color: "white",
-                  fontSize: "11px",
+                  fontSize: "17px",
                   fontWeight: 800,
                 }}
               >
@@ -492,22 +514,22 @@ function TechnicianDashboard() {
               wheelFL: false, wheelFR: false, wheelRL: false, wheelRR: false,
               steerFL: false, steerFR: false, steerRL: false, steerRR: false,
             })}
-            style={{ marginTop: "10px", width: "100%", borderRadius: "8px", border: "1px solid #7a1f1f", background: "#8f1d1d", color: "white", padding: "10px", fontWeight: 900, cursor: "pointer" }}
+            style={{ marginTop: "10px", width: "100%", borderRadius: "8px", border: "1px solid #7a1f1f", background: "#8f1d1d", color: "white", padding: "10px", fontWeight: 900, cursor: "pointer", fontSize: "19px" }}
           >
             Disable Motors (HARD SAFETY)
           </button>
         </div>
 
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
-          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Safety + Stability</div>
-          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Front-to-back tilt: <b>{tilt.pitchDeg.toFixed(2)} deg</b></div>
-          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Left-to-right tilt: <b>{tilt.rollDeg.toFixed(2)} deg</b></div>
-          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>X-Y plane tilt magnitude: <b>{tilt.magnitudeDeg.toFixed(2)} deg</b></div>
-          <div style={{ fontSize: "12px", color: "#d8d8d8" }}>Tilt vector: <b>{tilt.vectorLabel}</b></div>
-          <div style={{ marginTop: "6px", fontSize: "12px", color: tiltWarning ? "#ff8080" : "#9df79d", fontWeight: 800 }}>
+          <div style={{ fontSize: "20px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Safety + Stability</div>
+          <div style={{ fontSize: "19px", color: "#d8d8d8" }}>Front-to-back tilt: <b>{tilt.pitchDeg.toFixed(2)} deg</b></div>
+          <div style={{ fontSize: "19px", color: "#d8d8d8" }}>Left-to-right tilt: <b>{tilt.rollDeg.toFixed(2)} deg</b></div>
+          <div style={{ fontSize: "19px", color: "#d8d8d8" }}>X-Y plane tilt magnitude: <b>{tilt.magnitudeDeg.toFixed(2)} deg</b></div>
+          <div style={{ fontSize: "19px", color: "#d8d8d8" }}>Tilt vector: <b>{tilt.vectorLabel}</b></div>
+          <div style={{ marginTop: "6px", fontSize: "19px", color: tiltWarning ? "#ff8080" : "#9df79d", fontWeight: 800 }}>
             {tiltWarning ? "TILT WARNING ACTIVE" : "Tilt within safe range"}
           </div>
-          <div style={{ marginTop: "6px", fontSize: "12px", color: "#d8d8d8" }}>Area of Safety</div>
+          <div style={{ marginTop: "6px", fontSize: "19px", color: "#d8d8d8" }}>Area of Safety</div>
           <div style={{ width: "100%", height: "10px", borderRadius: "999px", background: "#2a2a2a", border: "1px solid #444", overflow: "hidden" }}>
             <div style={{ width: `${safetyPercent}%`, height: "100%", background: tiltWarning ? "#b91c1c" : "#15803d" }} />
           </div>
@@ -516,7 +538,7 @@ function TechnicianDashboard() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", height: "100%" }}>
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
-          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Status Indicators</div>
+          <div style={{ fontSize: "20px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Status Indicators</div>
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
             {["GREEN", "AMBER", "RED", "BLUE"].map((led) => (
               <button
@@ -528,7 +550,7 @@ function TechnicianDashboard() {
                   borderRadius: "8px",
                   border: "1px solid #555",
                   padding: "8px 6px",
-                  fontSize: "12px",
+                  fontSize: "18px",
                   fontWeight: 700,
                   cursor: "pointer",
                   background: ledState === led ? "#6d1111" : "#2f2f2f",
@@ -539,7 +561,7 @@ function TechnicianDashboard() {
               </button>
             ))}
           </div>
-          <div style={{ marginTop: "8px", color: "#d8d8d8", fontSize: "12px" }}>Current LED: <span style={{ fontWeight: 800, color: "#fff" }}>{ledState}</span></div>
+          <div style={{ marginTop: "8px", color: "#d8d8d8", fontSize: "19px" }}>Current LED: <span style={{ fontWeight: 800, color: "#fff" }}>{ledState}</span></div>
           <button
             onClick={() => setLaserWarningOn((prev) => !prev)}
             style={{
@@ -548,7 +570,7 @@ function TechnicianDashboard() {
               borderRadius: "8px",
               border: "1px solid #555",
               padding: "10px 8px",
-              fontSize: "13px",
+              fontSize: "19px",
               fontWeight: 800,
               cursor: "pointer",
               background: laserWarningOn ? "#8f1d1d" : "#2f2f2f",
@@ -557,39 +579,88 @@ function TechnicianDashboard() {
           >
             {laserWarningOn ? "WARNING: LASER ON" : "Laser Warning Off"}
           </button>
-          <div style={{ marginTop: "8px", fontSize: "12px", color: wheelFault ? "#ff8080" : "#9df79d", fontWeight: 800 }}>
+          <div style={{ marginTop: "8px", fontSize: "19px", color: wheelFault ? "#ff8080" : "#9df79d", fontWeight: 800 }}>
             {wheelFault ? "WHEEL FAULT LIGHT: ON" : "WHEEL FAULT LIGHT: OFF"}
           </div>
         </div>
 
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
-          <div style={{ fontSize: "12px", color: "#cfcfcf", marginBottom: "8px" }}>Chassis Subcomponent Checks</div>
+          <div style={{ fontSize: "20px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Chassis Subcomponent Checks</div>
           {systemChecks.map((check) => (
-            <div key={check.name} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: "1px solid #2d2d2d", fontSize: "12px" }}>
+            <div key={check.name} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid #2d2d2d", fontSize: "19px" }}>
               <span style={{ color: "#ddd" }}>{check.name}</span>
               <span style={{ color: check.ok ? "#9df79d" : "#ff8080", fontWeight: 800 }}>{check.ok ? "PASS" : "CHECK"}</span>
             </div>
           ))}
         </div>
       </div>
+
+      {showCanPopup && (
+        <div
+          onClick={() => setShowCanPopup(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0, 0, 0, 0.78)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1200,
+            padding: "20px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "min(860px, 96vw)", maxHeight: "84vh", overflowY: "auto", background: "#212121", border: "1px solid #4a4a4a", borderRadius: "12px", padding: "14px" }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+              <div style={{ color: "white", fontSize: "28px", fontWeight: 900 }}>CAN Connection Status</div>
+              <button
+                onClick={() => setShowCanPopup(false)}
+                style={{ borderRadius: "8px", border: "1px solid #666", background: "#333", color: "white", cursor: "pointer", padding: "8px 12px", fontWeight: 800, fontSize: "16px" }}
+              >
+                Close
+              </button>
+            </div>
+            <div style={{ color: "#cfcfcf", fontSize: "18px", marginBottom: "12px" }}>
+              Snapshot of all CAN channels. Data/logic is placeholder and can be wired later.
+            </div>
+            <div style={{ display: "grid", gap: "8px" }}>
+              {canConnections.map((bus) => (
+                <div key={bus.name} style={{ display: "grid", gridTemplateColumns: "1.8fr auto", gap: "10px", alignItems: "center", background: "#2b2b2b", border: "1px solid #3f3f3f", borderRadius: "10px", padding: "12px" }}>
+                  <div>
+                    <div style={{ color: "white", fontSize: "20px", fontWeight: 800 }}>{bus.name}</div>
+                    <div style={{ color: "#bdbdbd", fontSize: "16px", marginTop: "4px" }}>{bus.detail}</div>
+                  </div>
+                  <div style={{ display: "grid", gap: "6px", minWidth: "120px" }}>
+                    <div style={{ borderRadius: "999px", padding: "8px 12px", fontWeight: 900, fontSize: "16px", color: "white", textAlign: "center", background: bus.percent >= 75 ? "#166534" : bus.percent >= 40 ? "#b45309" : "#991b1b" }}>
+                      {bus.percent}%
+                    </div>
+                    <div style={{ height: "8px", borderRadius: "999px", background: "#3a3a3a", overflow: "hidden" }}>
+                      <div style={{ width: `${bus.percent}%`, height: "100%", background: bus.percent >= 75 ? "#22c55e" : bus.percent >= 40 ? "#f59e0b" : "#ef4444" }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 
 function PageContent({ selectedMode, selectedSubsystem, setSelectedSubsystem, selectedNavItem, setSelectedNavItem, sharedRos, setSharedRos }) {
-  if (selectedMode === "Simulation") {
-    return <Simulation selectedSubsystem={selectedSubsystem} />;
-  }
-  else if (selectedMode === "Operator") {
+  if (selectedMode === "Operator") {
     return (
       <div style={{ height: "100%", minHeight: 0 }}>
         <Cameras selectedSubsystem={selectedSubsystem} setSelectedSubsystem={setSelectedSubsystem} />
       </div>
     );
-  }
-  else if (selectedMode === "Science Missions") {
-    return <Sensors selectedSubsystem={selectedSubsystem} />;
   }
   else if (selectedMode === "Technician") {
     return (
@@ -642,7 +713,6 @@ function Simulation( {selectedSubsystem} ) {
 
 function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
   const [fullscreenCam, setFullscreenCam] = useState(null);
-  const [activeControlMode, setActiveControlMode] = useState("Drive Command");
   const [fps, setFps] = useState(24);
   const [streamPlaying, setStreamPlaying] = useState(true);
   const [forcedFrameCount, setForcedFrameCount] = useState(0);
@@ -651,11 +721,16 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
   const [armClampDistance, setArmClampDistance] = useState(35);
   const [panoramaShots, setPanoramaShots] = useState(0);
   const [sciencePhotos, setSciencePhotos] = useState(0);
-
-  const CONTROL_MODES = ["Drive Command", "Arm Command", "Science Command"];
+  const [lastPanoramaLabel, setLastPanoramaLabel] = useState("No panorama captured yet.");
+  const [sciencePopup, setSciencePopup] = useState(null);
 
   useEffect(() => {
-    const handleKey = (e) => { if (e.key === "Escape") setFullscreenCam(null); };
+    const handleKey = (e) => {
+      if (e.key === "Escape") {
+        setFullscreenCam(null);
+        setSciencePopup(null);
+      }
+    };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
@@ -732,6 +807,108 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
     </div>
   );
 
+  const SciencePopupOverlay = () => {
+    if (!sciencePopup) return null;
+
+    let title = "";
+    let body = null;
+
+    if (sciencePopup === "panorama") {
+      title = "Panorama Preview";
+      body = (
+        <div style={{ display: "grid", gap: "10px" }}>
+          <img
+            src="http://localhost:5000/camera/12"
+            alt="Latest panorama preview"
+            style={{ width: "100%", maxHeight: "50vh", objectFit: "cover", borderRadius: "10px", border: "1px solid #444", background: "#111" }}
+          />
+          <div style={{ color: "#d8d8d8", fontSize: "13px" }}>{lastPanoramaLabel}</div>
+          <div style={{ color: "#a9a9a9", fontSize: "12px" }}>Placeholder preview panel. Stitching/export will be wired later.</div>
+        </div>
+      );
+    } else if (sciencePopup === "tasks") {
+      title = "Additional Science Tasks";
+      const taskItems = [
+        "Soil Core Collection",
+        "Rock Face Classification",
+        "Sample Bag Labeling",
+        "Drill Site Annotation",
+        "Spectrometer Calibration",
+      ];
+      body = (
+        <div style={{ display: "grid", gap: "8px" }}>
+          {taskItems.map((task) => (
+            <button
+              key={task}
+              style={{ textAlign: "left", borderRadius: "8px", border: "1px solid #555", background: "#2d2d2d", color: "white", padding: "10px 12px", cursor: "pointer", fontWeight: 700 }}
+            >
+              {task}
+            </button>
+          ))}
+          <div style={{ color: "#a9a9a9", fontSize: "12px" }}>Task actions are UI placeholders for now.</div>
+        </div>
+      );
+    } else if (sciencePopup === "soil") {
+      title = "Soil Moisture Analysis";
+      const points = [28, 34, 41, 39, 44, 48, 52];
+      body = (
+        <div style={{ display: "grid", gap: "8px" }}>
+          <div style={{ color: "#d8d8d8", fontSize: "13px" }}>Probe trend over last 7 reads</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "6px", alignItems: "end", height: "150px", background: "#171717", border: "1px solid #444", borderRadius: "8px", padding: "10px" }}>
+            {points.map((p, i) => (
+              <div key={`soil-${i}`} style={{ height: `${p * 2}px`, background: "#16a34a", borderRadius: "4px 4px 0 0" }} title={`T${i + 1}: ${p}%`} />
+            ))}
+          </div>
+          <div style={{ color: "#a9a9a9", fontSize: "12px" }}>Graph is a placeholder UI panel.</div>
+        </div>
+      );
+    } else if (sciencePopup === "spectral") {
+      title = "Spectral Intensity Analysis";
+      const bands = [20, 35, 58, 46, 62, 49, 38, 28];
+      body = (
+        <div style={{ display: "grid", gap: "8px" }}>
+          <div style={{ color: "#d8d8d8", fontSize: "13px" }}>Relative signal by wavelength band</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: "6px", alignItems: "end", height: "150px", background: "#171717", border: "1px solid #444", borderRadius: "8px", padding: "10px" }}>
+            {bands.map((p, i) => (
+              <div key={`spec-${i}`} style={{ height: `${p * 2}px`, background: "#2563eb", borderRadius: "4px 4px 0 0" }} title={`Band ${i + 1}: ${p}`} />
+            ))}
+          </div>
+          <div style={{ color: "#a9a9a9", fontSize: "12px" }}>Graph is a placeholder UI panel.</div>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        onClick={() => setSciencePopup(null)}
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: "rgba(0, 0, 0, 0.75)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1100,
+          padding: "20px",
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{ width: "min(760px, 96vw)", maxHeight: "85vh", overflowY: "auto", background: "#222", border: "1px solid #4a4a4a", borderRadius: "12px", padding: "14px" }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+            <div style={{ color: "white", fontWeight: 900, fontSize: "20px" }}>{title}</div>
+            <button onClick={() => setSciencePopup(null)} style={{ borderRadius: "8px", border: "1px solid #666", background: "#333", color: "white", cursor: "pointer", padding: "6px 10px", fontWeight: 800 }}>Close</button>
+          </div>
+          {body}
+        </div>
+      </div>
+    );
+  };
+
   if (selectedSubsystem === "Drive") {
     const frontCamera = { label: "Front Camera", id: 15 };
     const backCamera = { label: "Back Camera", id: 16 };
@@ -752,18 +929,6 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
           <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
             <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Control State + Safety</div>
-            <div style={{ fontSize: "12px", color: "#e8e8e8", marginBottom: "6px" }}>Active Mode: <b>{activeControlMode}</b></div>
-            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "6px" }}>
-              {CONTROL_MODES.map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => setActiveControlMode(mode)}
-                  style={{ border: "1px solid #555", borderRadius: "999px", padding: "4px 8px", fontSize: "11px", cursor: "pointer", background: activeControlMode === mode ? "#7c1919" : "#303030", color: "white", fontWeight: 700 }}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
             <button
               onClick={() => setEmergencyStop((prev) => !prev)}
               style={{ width: "100%", borderRadius: "8px", border: "1px solid #803737", padding: "7px", cursor: "pointer", background: emergencyStop ? "#a31616" : "#3a3a3a", color: "white", fontWeight: 900 }}
@@ -847,13 +1012,14 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
         {/* Control row: 2 panels side by side, auto height */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
           <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
-            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Arm Control + Safety</div>
-            <div style={{ fontSize: "12px", color: "#e8e8e8", marginBottom: "6px" }}>Active Mode: <b>{activeControlMode}</b></div>
-            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-              {CONTROL_MODES.map((mode) => (
-                <button key={mode} onClick={() => setActiveControlMode(mode)} style={{ border: "1px solid #555", borderRadius: "999px", padding: "4px 8px", fontSize: "11px", cursor: "pointer", background: activeControlMode === mode ? "#7c1919" : "#303030", color: "white", fontWeight: 700 }}>{mode}</button>
-              ))}
-            </div>
+            <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Arm Safety</div>
+            <div style={{ fontSize: "12px", color: "#e8e8e8" }}>Emergency Stop: <b>{emergencyStop ? "ON" : "OFF"}</b></div>
+            <button
+              onClick={() => setEmergencyStop((prev) => !prev)}
+              style={{ marginTop: "8px", width: "100%", borderRadius: "8px", border: "1px solid #803737", padding: "8px 10px", cursor: "pointer", background: emergencyStop ? "#a31616" : "#3a3a3a", color: "white", fontWeight: 900 }}
+            >
+              {emergencyStop ? "E-STOP ON" : "Emergency Stop"}
+            </button>
           </div>
           <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px", display: "flex", flexDirection: "column", gap: "8px" }}>
             <div>
@@ -861,9 +1027,6 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
               <input type="range" min={0} max={100} value={armClampDistance} onChange={(e) => setArmClampDistance(Number(e.target.value))} style={{ width: "100%" }} />
               <div style={{ color: "white", fontSize: "12px" }}>{armClampDistance}%</div>
             </div>
-            <button onClick={() => setEmergencyStop((prev) => !prev)} style={{ borderRadius: "8px", border: "1px solid #803737", padding: "8px 10px", cursor: "pointer", background: emergencyStop ? "#a31616" : "#3a3a3a", color: "white", fontWeight: 900 }}>
-              {emergencyStop ? "E-STOP ON" : "Emergency Stop"}
-            </button>
           </div>
         </div>
         {/* Cameras: 2×2 grid for portrait */}
@@ -895,8 +1058,31 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
           <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
             <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Science Imaging / Capture</div>
             <div style={{ display: "flex", gap: "6px" }}>
-              <button onClick={() => setPanoramaShots((n) => n + 1)} style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}>Panorama</button>
+              <button
+                onClick={() => setPanoramaShots((n) => {
+                  const next = n + 1;
+                  setLastPanoramaLabel(`Panorama #${next} captured at ${new Date().toLocaleTimeString()}`);
+                  return next;
+                })}
+                style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}
+              >
+                Panorama
+              </button>
               <button onClick={() => setSciencePhotos((n) => n + 1)} style={{ flex: 1, borderRadius: "6px", border: "1px solid #555", background: "#303030", color: "white", cursor: "pointer", fontWeight: 700 }}>Take Picture</button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginTop: "6px" }}>
+              <button
+                onClick={() => setSciencePopup("panorama")}
+                style={{ borderRadius: "6px", border: "1px solid #555", background: "#2f2f2f", color: "white", cursor: "pointer", fontWeight: 700 }}
+              >
+                Open Panorama Popup
+              </button>
+              <button
+                onClick={() => setSciencePopup("tasks")}
+                style={{ borderRadius: "6px", border: "1px solid #555", background: "#2f2f2f", color: "white", cursor: "pointer", fontWeight: 700 }}
+              >
+                Additional Science Tasks
+              </button>
             </div>
             <div style={{ marginTop: "6px", color: "#ddd", fontSize: "11px" }}>
               Panoramas: {panoramaShots} | Photos: {sciencePhotos}
@@ -905,10 +1091,20 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
           <div style={{ background: "#232323", border: "1px solid #3d3d3d", borderRadius: "10px", padding: "8px" }}>
             <div style={{ fontSize: "11px", color: "#ddd", marginBottom: "6px", fontWeight: 800 }}>Science Data Graphs</div>
             <div style={{ display: "grid", gap: "6px" }}>
-              <div style={{ fontSize: "10px", color: "#cfcfcf" }}>Soil Moisture</div>
-              {graphBar(72, "#16a34a")}
-              <div style={{ fontSize: "10px", color: "#cfcfcf" }}>Spectral Intensity</div>
-              {graphBar(48, "#2563eb")}
+              <button
+                onClick={() => setSciencePopup("soil")}
+                style={{ textAlign: "left", borderRadius: "6px", border: "1px solid #4d4d4d", background: "#2d2d2d", color: "#cfcfcf", fontSize: "10px", padding: "6px", cursor: "pointer" }}
+              >
+                Soil Moisture (Open Popup)
+                <div style={{ marginTop: "5px" }}>{graphBar(72, "#16a34a")}</div>
+              </button>
+              <button
+                onClick={() => setSciencePopup("spectral")}
+                style={{ textAlign: "left", borderRadius: "6px", border: "1px solid #4d4d4d", background: "#2d2d2d", color: "#cfcfcf", fontSize: "10px", padding: "6px", cursor: "pointer" }}
+              >
+                Spectral Intensity (Open Popup)
+                <div style={{ marginTop: "5px" }}>{graphBar(48, "#2563eb")}</div>
+              </button>
               <div style={{ fontSize: "10px", color: "#cfcfcf" }}>Thermal Delta</div>
               {graphBar(35, "#f97316")}
             </div>
@@ -923,6 +1119,7 @@ function Cameras({ selectedSubsystem, setSelectedSubsystem }) {
           </div>
         </div>
         <FullscreenOverlay />
+        <SciencePopupOverlay />
       </div>
     );
   }
