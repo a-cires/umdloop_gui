@@ -9,7 +9,7 @@ import { getRosbridgeUrl, useLocalTiles } from "./config";
 const GPS_TOPIC = "/gps/fix";
 const GPS_MSG_TYPE = "sensor_msgs/msg/NavSatFix";
 
-export default function MapView({ selectedSubsystem }) {
+export default function MapView({ selectedSubsystem, titleOverride }) {
   const [viewState, setViewState] = useState({
     longitude: -76.9378,
     latitude: 38.9897,
@@ -139,7 +139,7 @@ export default function MapView({ selectedSubsystem }) {
       }}
     >
       <div style={{ padding: "20px", background: "#2d2d2d", color: "white" }}>
-        <h1>{selectedSubsystem} - Map View</h1>
+        <h1>{titleOverride || `${selectedSubsystem} - Map View`}</h1>
         <p style={{ marginTop: "8px", fontSize: "14px", opacity: 0.9 }}>
           Rover link: <span style={{ fontWeight: "bold" }}>{rosStatus}</span>
           {roverPosition && (
@@ -148,7 +148,6 @@ export default function MapView({ selectedSubsystem }) {
             </span>
           )}
         </p>
-
         <form
           onSubmit={handleCoordinateSubmit}
           style={{
