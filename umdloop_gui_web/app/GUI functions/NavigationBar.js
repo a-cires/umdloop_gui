@@ -1,13 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { MODE_ICONS, MODES } from "./pageConstants";
 
 export default function NavigationBar({ selectedMode, setSelectedMode }) {
   const [hoveredButtonId, setHoveredButtonId] = useState(null);
   const [selectedButton, setSelectedButton] = useState(MODES.indexOf(selectedMode));
-
-  useEffect(() => { setSelectedButton(MODES.indexOf(selectedMode)); }, [selectedMode]);
 
   return (
     <nav
