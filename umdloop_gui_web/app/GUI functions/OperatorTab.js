@@ -21,13 +21,27 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
   const [showCameraManager, setShowCameraManager] = useState(false);
   const [stopwatchRunning, setStopwatchRunning] = useState(false);
   const [stopwatchElapsedMs, setStopwatchElapsedMs] = useState(0);
+  const [locationReached, setLocationReached] = useState(false);
   const stopwatchStartRef = useRef(null);
+  const driveRosCommandPlaceholders = ["ROS2 Command 1", "ROS2 Command 2", "ROS2 Command 3", "ROS2 Command 4"];
+  const confettiPieces = Array.from({ length: 42 }, (_, index) => ({
+    id: index,
+    color: ["#ff4d4d", "#ffd166", "#06d6a0", "#4cc9f0", "#f72585", "#ffffff"][index % 6],
+    delay: `${(index % 7) * 0.08}s`,
+    duration: `${1.55 + (index % 5) * 0.16}s`,
+    rotation: `${(index * 37) % 360}deg`,
+    burstX: `${((index % 10) - 4.5) * 10}px`,
+    burstY: `${-185 - (index % 7) * 24}px`,
+    fallX: `${((index % 12) - 5.5) * 24}px`,
+    fallY: `${300 + (index % 8) * 36}px`,
+  }));
 
   useEffect(() => {
     const handleKey = (e) => {
       if (e.key === "Escape") {
         setFullscreenCam(null);
         setSciencePopup(null);
+        setLocationReached(false);
       }
     };
     window.addEventListener("keydown", handleKey);
@@ -207,6 +221,24 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
       <button onClick={() => setSelectedSubsystem?.("Drive (Science)")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Drive (Science)" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Drive Science</button>
       <button onClick={() => setSelectedSubsystem?.("Arm")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Arm" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Arm</button>
       <button onClick={() => setShowCameraManager(true)} style={{ borderRadius: "6px", border: "1px solid #555", background: "#1a3f6f", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px", fontWeight: 700 }}>Camera Manager</button>
+      {(selectedSubsystem === "Drive (Default)" || selectedSubsystem === "Drive") ? (
+        <button
+          onClick={() => setLocationReached(true)}
+          style={{
+            marginLeft: "auto",
+            borderRadius: "8px",
+            border: locationReached ? "1px solid #2f7d3a" : "1px solid #803737",
+            background: locationReached ? "#1f8f35" : "#8a1f1f",
+            color: "white",
+            cursor: "pointer",
+            padding: "6px 14px",
+            fontSize: "12px",
+            fontWeight: 900,
+          }}
+        >
+          Location Reached
+        </button>
+      ) : null}
     </div>
   );
 
@@ -294,6 +326,27 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
           >
             {emergencyStop ? "EMERGENCY STOP ACTIVE" : "Emergency Stop"}
           </button>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "6px", marginTop: "8px" }}>
+            {driveRosCommandPlaceholders.map((commandLabel) => (
+              <button
+                key={commandLabel}
+                type="button"
+                style={{
+                  minHeight: "42px",
+                  borderRadius: "8px",
+                  border: "1px solid #555",
+                  background: "#303030",
+                  color: "#d8d8d8",
+                  cursor: "pointer",
+                  fontWeight: 800,
+                  fontSize: "10px",
+                  padding: "6px",
+                }}
+              >
+                {commandLabel}
+              </button>
+            ))}
+          </div>
         </div>
 
         <ControlRow />
@@ -339,6 +392,87 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
           </div>
         </div>
         <FullscreenOverlay />
+        {locationReached ? (
+          <div
+            tabIndex={-1}
+            onClick={() => setLocationReached(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              background: "rgba(0,0,0,0.86)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "24px",
+              overflow: "hidden",
+            }}
+          >
+            <style>
+              {`
+                @keyframes locationReachedConfetti {
+                  0% {
+                    opacity: 0;
+                    transform: translate3d(-50%, -50%, 0) rotate(0deg) scale(0.65);
+                  }
+                  10% {
+                    opacity: 1;
+                  }
+                  36% {
+                    opacity: 1;
+                    transform: translate3d(calc(-50% + var(--confetti-burst-x)), calc(-50% + var(--confetti-burst-y)), 0) rotate(260deg) scale(1);
+                  }
+                  100% {
+                    opacity: 0;
+                    transform: translate3d(calc(-50% + var(--confetti-fall-x)), calc(-50% + var(--confetti-fall-y)), 0) rotate(780deg) scale(0.95);
+                  }
+                }
+              `}
+            </style>
+            {confettiPieces.map((piece) => (
+              <div
+                key={piece.id}
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  width: piece.id % 3 === 0 ? "7px" : "10px",
+                  height: piece.id % 3 === 0 ? "16px" : "8px",
+                  borderRadius: piece.id % 4 === 0 ? "9999px" : "2px",
+                  background: piece.color,
+                  transform: `rotate(${piece.rotation})`,
+                  opacity: 0,
+                  animation: `locationReachedConfetti ${piece.duration} cubic-bezier(0.18, 0.82, 0.28, 1) ${piece.delay} 2`,
+                  "--confetti-burst-x": piece.burstX,
+                  "--confetti-burst-y": piece.burstY,
+                  "--confetti-fall-x": piece.fallX,
+                  "--confetti-fall-y": piece.fallY,
+                }}
+              />
+            ))}
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                width: "min(900px, 92vw)",
+                minHeight: "min(360px, 70vh)",
+                borderRadius: "14px",
+                border: "3px solid #2f7d3a",
+                background: "#102215",
+                boxShadow: "0 18px 60px rgba(0,0,0,0.55)",
+                color: "white",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                fontSize: "clamp(44px, 8vw, 96px)",
+                fontWeight: 1000,
+                letterSpacing: "0.04em",
+              }}
+            >
+              LOCATION REACHED
+            </div>
+          </div>
+        ) : null}
         {showCameraManager && <CameraManagerModal onClose={() => setShowCameraManager(false)} />}
       </div>
     );
