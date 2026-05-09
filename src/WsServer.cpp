@@ -45,47 +45,108 @@ void WsServer::stop() {
     if (context_) lws_cancel_service(context_);
 }
 
-void WsServer::sendMessage(const std::string& message) {
+void WsServer::broadcastMessage(const std::string& message) {
     {
-        std::lock_guard<std::mutex> lock(queueMutex_);
-        messageQueue_.push(message);
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        for (const auto& [clientId, _] : clients_)
+            messageQueues_[clientId].push(message);
     }
     if (context_) lws_cancel_service(context_);
 }
 
+void WsServer::sendMessageToClient(int clientId, const std::string& message) {
+    {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        if (!clients_.count(clientId)) return;
+        messageQueues_[clientId].push(message);
+    }
+    if (context_) lws_cancel_service(context_);
+}
+
+std::set<int> WsServer::getClientIds() const {
+    std::lock_guard<std::mutex> lock(clientsMutex_);
+    std::set<int> ids;
+    for (const auto& [clientId, _] : clients_)
+        ids.insert(clientId);
+    return ids;
+}
+
 int WsServer::onWsCallback(lws* wsi, lws_callback_reasons reason, void* in, size_t len) {
     switch (reason) {
-        case LWS_CALLBACK_ESTABLISHED:
-            client_wsi_ = wsi;
-            std::cout << "Client connected" << std::endl;
-            if (onConnect_) onConnect_();
+        case LWS_CALLBACK_ESTABLISHED: {
+            int clientId = nextClientId_++;
+            {
+                std::lock_guard<std::mutex> lock(clientsMutex_);
+                clients_[clientId] = wsi;
+                clientIdsByWsi_[wsi] = clientId;
+            }
+            std::cout << "Client connected: id=" << clientId << std::endl;
+            if (onConnect_) onConnect_(clientId);
             lws_callback_on_writable(wsi);
             break;
+        }
 
-        case LWS_CALLBACK_CLOSED:
-            if (client_wsi_ == wsi) {
-                client_wsi_ = nullptr;
-                std::cout << "Client disconnected" << std::endl;
+        case LWS_CALLBACK_CLOSED: {
+            int clientId = 0;
+            {
+                std::lock_guard<std::mutex> lock(clientsMutex_);
+                auto it = clientIdsByWsi_.find(wsi);
+                if (it != clientIdsByWsi_.end()) {
+                    clientId = it->second;
+                    clientIdsByWsi_.erase(it);
+                    clients_.erase(clientId);
+                    messageQueues_.erase(clientId);
+                }
+            }
+            if (clientId) {
+                std::cout << "Client disconnected: id=" << clientId << std::endl;
+                if (onDisconnect_) onDisconnect_(clientId);
+            }
+            break;
+        }
+
+        case LWS_CALLBACK_RECEIVE: {
+            int clientId = 0;
+            {
+                std::lock_guard<std::mutex> lock(clientsMutex_);
+                auto it = clientIdsByWsi_.find(wsi);
+                if (it != clientIdsByWsi_.end()) clientId = it->second;
+            }
+            if (clientId && onMessage_ && in)
+                onMessage_(clientId, std::string(static_cast<char*>(in), len));
+            break;
+        }
+
+        case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
+            {
+                std::lock_guard<std::mutex> lock(clientsMutex_);
+                for (const auto& [_, clientWsi] : clients_)
+                    lws_callback_on_writable(clientWsi);
             }
             break;
 
-        case LWS_CALLBACK_RECEIVE:
-            if (onMessage_ && in)
-                onMessage_(std::string(static_cast<char*>(in), len));
-            break;
-
-        case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
-            if (client_wsi_) lws_callback_on_writable(client_wsi_);
-            break;
-
         case LWS_CALLBACK_SERVER_WRITEABLE: {
-            std::lock_guard<std::mutex> lock(queueMutex_);
-            while (!messageQueue_.empty()) {
-                std::string msg = messageQueue_.front();
-                messageQueue_.pop();
-                std::vector<unsigned char> buf(LWS_PRE + msg.size());
-                memcpy(&buf[LWS_PRE], msg.c_str(), msg.size());
-                lws_write(wsi, &buf[LWS_PRE], msg.size(), LWS_WRITE_TEXT);
+            int clientId = 0;
+            {
+                std::lock_guard<std::mutex> lock(clientsMutex_);
+                auto idIt = clientIdsByWsi_.find(wsi);
+                if (idIt == clientIdsByWsi_.end()) break;
+                clientId = idIt->second;
+                auto queueIt = messageQueues_.find(clientId);
+                if (queueIt == messageQueues_.end()) break;
+
+                while (!queueIt->second.empty()) {
+                    std::string msg = queueIt->second.front();
+                    queueIt->second.pop();
+                    std::vector<unsigned char> buf(LWS_PRE + msg.size());
+                    memcpy(&buf[LWS_PRE], msg.c_str(), msg.size());
+                    lws_write(wsi, &buf[LWS_PRE], msg.size(), LWS_WRITE_TEXT);
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(clientsMutex_);
+                if (messageQueues_.count(clientId) && !messageQueues_[clientId].empty())
+                    lws_callback_on_writable(wsi);
             }
             break;
         }

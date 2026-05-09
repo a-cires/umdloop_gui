@@ -59,18 +59,36 @@ int main(int argc, char* argv[]) {
     if (!stunIp.empty())
         manager.setStunServer("stun://" + stunIp + ":3478");
 
-    auto sendState = [&]() {
-        ws.sendMessage(manager.buildStateJson());
+    auto sendState = [&](int clientId) {
+        ws.sendMessageToClient(clientId, manager.buildStateJson(clientId));
+    };
+    auto broadcastState = [&]() {
+        for (int clientId : ws.getClientIds())
+            sendState(clientId);
     };
     auto sendMissionsState = [&]() {
-        ws.sendMessage(missions.buildMissionsStateJson().dump());
+        ws.broadcastMessage(missions.buildMissionsStateJson().dump());
+    };
+    auto sendMissionsStateToClient = [&](int clientId) {
+        ws.sendMessageToClient(clientId, missions.buildMissionsStateJson().dump());
     };
 
-    manager.setOfferCallback([&](const std::string& id, const std::string& sdp) {
-        ws.sendMessage(json{{"type","offer"},{"id",id},{"sdp",sdp}}.dump());
+    manager.setOfferCallback([&](int clientId, const std::string& id, const std::string& sdp) {
+        ws.sendMessageToClient(clientId, json{
+            {"type","offer"},
+            {"client_id",clientId},
+            {"id",id},
+            {"sdp",sdp}
+        }.dump());
     });
-    manager.setIceCallback([&](const std::string& id, const std::string& candidate, int mline) {
-        ws.sendMessage(json{{"type","ice"},{"id",id},{"candidate",candidate},{"sdpMLineIndex",mline}}.dump());
+    manager.setIceCallback([&](int clientId, const std::string& id, const std::string& candidate, int mline) {
+        ws.sendMessageToClient(clientId, json{
+            {"type","ice"},
+            {"client_id",clientId},
+            {"id",id},
+            {"candidate",candidate},
+            {"sdpMLineIndex",mline}
+        }.dump());
     });
 
     manager.loadConfigs(kConfigPath);
@@ -79,36 +97,42 @@ int main(int argc, char* argv[]) {
 
     missions.load(kMissionsPath);
 
-    ws.setOnConnectCallback([&]() {
-        sendState();
-        sendMissionsState();
+    ws.setOnConnectCallback([&](int clientId) {
+        ws.sendMessageToClient(clientId, json{{"type","client"},{"client_id",clientId}}.dump());
+        sendState(clientId);
+        sendMissionsStateToClient(clientId);
     });
 
-    ws.setOnMessageCallback([&](const std::string& raw) {
+    ws.setOnDisconnectCallback([&](int clientId) {
+        manager.disconnectClient(clientId);
+        broadcastState();
+    });
+
+    ws.setOnMessageCallback([&](int clientId, const std::string& raw) {
         try {
             auto msg  = json::parse(raw);
             auto type = msg["type"].get<std::string>();
 
             if (type == "answer") {
-                manager.setRemoteAnswer(msg["id"], msg["sdp"]);
+                manager.setRemoteAnswer(clientId, msg["id"], msg["sdp"]);
             } else if (type == "ice") {
-                manager.addIceCandidate(msg["id"], msg["candidate"], msg["sdpMLineIndex"]);
+                manager.addIceCandidate(clientId, msg["id"], msg["candidate"], msg["sdpMLineIndex"]);
             } else if (type == "enable") {
-                manager.enableCamera(msg["camera_id"]);
-                sendState();
+                manager.enableCamera(clientId, msg["camera_id"]);
+                broadcastState();
             } else if (type == "disable") {
-                manager.disableCamera(msg["camera_id"]);
-                sendState();
+                manager.disableCamera(clientId, msg["camera_id"]);
+                broadcastState();
             } else if (type == "set_config") {
                 manager.applyConfigPatch(msg["camera_id"], msg["config"]);
                 manager.saveConfigs(kConfigPath);
-                sendState();
+                broadcastState();
             } else if (type == "rename") {
                 manager.renameCamera(msg["camera_id"], msg["name"]);
                 manager.saveConfigs(kConfigPath);
-                sendState();
+                broadcastState();
             } else if (type == "list_missions") {
-                sendMissionsState();
+                sendMissionsStateToClient(clientId);
             } else if (type == "save_mission") {
                 std::string mName = msg.value("name", "Unnamed Mission");
                 std::string mId   = msg.value("id",   "");
@@ -125,7 +149,7 @@ int main(int argc, char* argv[]) {
                     manager.saveConfigs(kConfigPath);
                     missions.setActiveMission(msg["id"]);
                     missions.save(kMissionsPath);
-                    sendState();
+                    broadcastState();
                     sendMissionsState();
                 }
             } else if (type == "delete_mission") {
@@ -138,7 +162,7 @@ int main(int argc, char* argv[]) {
                 sendMissionsState();
             }
         } catch (const std::exception& e) {
-            std::cerr << "ws message error: " << e.what() << std::endl;
+            std::cerr << "ws message error for client=" << clientId << ": " << e.what() << std::endl;
         }
     });
 
@@ -155,11 +179,14 @@ int main(int argc, char* argv[]) {
     struct StatsCtx { CameraManager* m; WsServer* s; } statsCtx{&manager, &ws};
     g_timeout_add(500, [](gpointer data) -> gboolean {
         auto& ctx = *static_cast<StatsCtx*>(data);
-        for (const auto& [id, cfg] : ctx.m->getConfigs()) {
-            if (!ctx.m->isEnabled(id)) continue;
-            auto s = ctx.m->getCameraStats(id);
-            ctx.s->sendMessage(json{
+        if (ctx.m->reapFailedPipelines())
+            for (int clientId : ctx.s->getClientIds())
+                ctx.s->sendMessageToClient(clientId, ctx.m->buildStateJson(clientId));
+        for (const auto& [clientId, id] : ctx.m->getActiveViews()) {
+            auto s = ctx.m->getCameraStats(clientId, id);
+            ctx.s->sendMessageToClient(clientId, json{
                 {"type",      "stats"},
+                {"client_id", clientId},
                 {"camera_id", id},
                 {"fps",       s.fps},
                 {"bitrate",   s.bitrate},

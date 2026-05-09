@@ -1,15 +1,59 @@
 #include "CameraManager.hpp"
 #include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <gst/gst.h>
 #include <iostream>
+#include <map>
+#include <thread>
 #ifdef __linux__
 #  include <climits>
 #  include <cstdlib>
 #  include <sstream>
+#  include <unistd.h>
 #endif
 
 using json = nlohmann::json;
+
+struct DiscoveryCandidate {
+    int idx = 0;
+    std::string displayName;
+    std::string devicePath;
+    std::string usbPath;
+    std::string physicalKey;
+    std::vector<CameraMode> modes;
+    bool cropLeftHalf = false;
+};
+
+static std::string lowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
+
+static int videoDeviceIndex(const std::string& devPath) {
+    const std::string prefix = "/dev/video";
+    auto pos = devPath.rfind(prefix);
+    if (pos == std::string::npos) return 100000;
+
+    const std::string n = devPath.substr(pos + prefix.size());
+    if (n.empty() || !std::all_of(n.begin(), n.end(), [](unsigned char c) { return std::isdigit(c); }))
+        return 100000;
+    return std::atoi(n.c_str());
+}
+
+static bool devicePathExists(const std::string& devPath) {
+#ifdef __linux__
+    if (devPath.rfind("/dev/", 0) != 0) return true;
+    return access(devPath.c_str(), F_OK) == 0;
+#else
+    (void)devPath;
+    return true;
+#endif
+}
 
 // Returns a stable USB topology string (e.g. "usb:1-1.2") for a v4l2 device
 // by resolving its sysfs symlink and extracting the USB port path.
@@ -68,6 +112,45 @@ static int extractMaxFps(const GValue* v) {
     return 0;
 }
 
+static std::vector<int> extractFpsValues(const GValue* v) {
+    std::vector<int> values;
+    if (!v) return values;
+
+    auto addFraction = [&](const GValue* item) {
+        if (!GST_VALUE_HOLDS_FRACTION(item)) return;
+        int n = gst_value_get_fraction_numerator(item);
+        int d = gst_value_get_fraction_denominator(item);
+        if (d <= 0) return;
+        int fps = n / d;
+        if (fps > 0) values.push_back(fps);
+    };
+
+    if (GST_VALUE_HOLDS_FRACTION(v)) {
+        addFraction(v);
+    } else if (GST_VALUE_HOLDS_LIST(v)) {
+        guint sz = gst_value_list_get_size(v);
+        for (guint i = 0; i < sz; ++i)
+            addFraction(gst_value_list_get_value(v, i));
+    }
+
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    return values;
+}
+
+static int chooseSupportedFps(int requested, const CameraMode& mode) {
+    int target = requested > 0 ? requested : 10;
+    if (!mode.fpsValues.empty()) {
+        int best = mode.fpsValues.front();
+        for (int fps : mode.fpsValues) {
+            if (fps <= target) best = fps;
+            if (fps >= target) break;
+        }
+        return std::max(1, best);
+    }
+    return std::max(1, std::min(target, mode.maxFps));
+}
+
 static std::vector<CameraMode> parseCaps(GstCaps* caps) {
     std::vector<CameraMode> modes;
     if (!caps || gst_caps_is_any(caps) || gst_caps_is_empty(caps)) return modes;
@@ -95,12 +178,16 @@ static std::vector<CameraMode> parseCaps(GstCaps* caps) {
         if (!fpsVal) continue;
         mode.maxFps = extractMaxFps(fpsVal);
         if (mode.maxFps <= 0) continue;
+        mode.fpsValues = extractFpsValues(fpsVal);
 
         auto it = std::find_if(modes.begin(), modes.end(), [&](const CameraMode& m) {
             return m.format == mode.format && m.width == mode.width && m.height == mode.height;
         });
         if (it != modes.end()) {
             it->maxFps = std::max(it->maxFps, mode.maxFps);
+            it->fpsValues.insert(it->fpsValues.end(), mode.fpsValues.begin(), mode.fpsValues.end());
+            std::sort(it->fpsValues.begin(), it->fpsValues.end());
+            it->fpsValues.erase(std::unique(it->fpsValues.begin(), it->fpsValues.end()), it->fpsValues.end());
         } else {
             modes.push_back(mode);
         }
@@ -126,6 +213,153 @@ static std::vector<CameraMode> parseCaps(GstCaps* caps) {
     return modes;
 }
 
+static bool containsBusyError(const std::string& message) {
+    return message.find("Device or resource busy") != std::string::npos ||
+           message.find("Resource busy") != std::string::npos ||
+           message.find("resource busy") != std::string::npos ||
+           message.find("Failed to allocate required memory") != std::string::npos ||
+           message.find("Buffer pool activation failed") != std::string::npos;
+}
+
+static bool isZedDevice(const std::string& displayName) {
+    std::string name = lowerCopy(displayName);
+    return name.find("zed") != std::string::npos;
+}
+
+static std::string makePhysicalKey(const std::string& displayName,
+                                   const std::string& devicePath,
+                                   const std::string& usbPath) {
+    if (!usbPath.empty()) return usbPath;
+    if (isZedDevice(displayName) && !displayName.empty()) return "name:" + lowerCopy(displayName);
+    return devicePath;
+}
+
+static bool hasStereoSideBySideMode(const std::vector<CameraMode>& modes) {
+    return std::any_of(modes.begin(), modes.end(), [](const CameraMode& mode) {
+        return mode.width == 1344 && mode.height == 376;
+    });
+}
+
+static bool shouldCropLeftHalf(const std::string& displayName,
+                               const std::vector<CameraMode>& modes) {
+    std::string name = lowerCopy(displayName);
+    return isZedDevice(displayName) ||
+           name.find("stereo") != std::string::npos ||
+           hasStereoSideBySideMode(modes);
+}
+
+static bool looksLikeMetadataNode(const DiscoveryCandidate& c) {
+    std::string name = lowerCopy(c.displayName);
+    return name.find("metadata") != std::string::npos ||
+           name.find("meta") != std::string::npos ||
+           c.modes.empty();
+}
+
+static bool isBetterRepresentative(const DiscoveryCandidate& candidate,
+                                   const DiscoveryCandidate& current) {
+    const bool candidateZed = isZedDevice(candidate.displayName);
+    const bool currentZed = isZedDevice(current.displayName);
+
+    if (candidateZed || currentZed) {
+        std::string candidateName = lowerCopy(candidate.displayName);
+        std::string currentName = lowerCopy(current.displayName);
+        const bool candidateLeft = candidateName.find("left") != std::string::npos;
+        const bool currentLeft = currentName.find("left") != std::string::npos;
+        if (candidateLeft != currentLeft) return candidateLeft;
+
+        const bool candidateRight = candidateName.find("right") != std::string::npos;
+        const bool currentRight = currentName.find("right") != std::string::npos;
+        if (candidateRight != currentRight) return !candidateRight;
+    }
+
+    int candidateIndex = videoDeviceIndex(candidate.devicePath);
+    int currentIndex = videoDeviceIndex(current.devicePath);
+    if (candidateIndex != currentIndex) return candidateIndex < currentIndex;
+
+    return candidate.idx < current.idx;
+}
+
+static void validateConfigMode(const std::string& id,
+                               CameraConfig& cfg,
+                               const std::vector<CameraMode>& modes) {
+    if (modes.empty()) return;
+
+    auto exact = std::find_if(modes.begin(), modes.end(), [&](const CameraMode& mode) {
+        return mode.format == cfg.format &&
+               mode.width == cfg.width &&
+               mode.height == cfg.height;
+    });
+
+    if (exact == modes.end()) {
+        const CameraMode& fallback = modes.front();
+        std::cerr << "camera config mode unsupported for " << id
+                  << ": " << cfg.format << " " << cfg.width << "x" << cfg.height
+                  << " on " << cfg.devicePath
+                  << "; using " << fallback.format << " "
+                  << fallback.width << "x" << fallback.height
+                  << " instead" << std::endl;
+        cfg.format = fallback.format;
+        cfg.width = fallback.width;
+        cfg.height = fallback.height;
+        cfg.fps = chooseSupportedFps(std::min(cfg.fps > 0 ? cfg.fps : 10, 10), fallback);
+        return;
+    }
+
+    int supportedFps = chooseSupportedFps(cfg.fps, *exact);
+    if (cfg.fps != supportedFps) {
+        int oldFps = cfg.fps;
+        cfg.fps = supportedFps;
+        std::cerr << "camera config fps adjusted for " << id
+                  << ": " << oldFps << " -> " << cfg.fps
+                  << " on " << cfg.devicePath << std::endl;
+    }
+}
+
+static void logConfigConflicts(const std::map<std::string, CameraConfig>& configs) {
+    std::map<std::string, std::vector<std::string>> byLiveKey;
+
+    for (const auto& [id, cfg] : configs) {
+        std::string key;
+        if (!cfg.usbPath.empty()) {
+            key = cfg.usbPath;
+        } else if (!cfg.devicePath.empty()) {
+            key = cfg.devicePath;
+        }
+
+        if (!key.empty())
+            byLiveKey[key].push_back(id);
+    }
+
+    for (const auto& [key, ids] : byLiveKey) {
+        if (ids.size() < 2) continue;
+
+        std::cerr << "camera config conflict: ";
+        for (size_t i = 0; i < ids.size(); ++i) {
+            if (i) std::cerr << ", ";
+            std::cerr << ids[i];
+        }
+        std::cerr << " all map to " << key
+                  << "; only one pipeline can use a physical camera at a time"
+                  << std::endl;
+    }
+}
+
+std::string CameraManager::pipelineKey(int clientId, const std::string& id) {
+    return std::to_string(clientId) + ":" + id;
+}
+
+static int clientIdFromPipelineKey(const std::string& key) {
+    auto pos = key.find(':');
+    if (pos == std::string::npos) return 0;
+    return std::atoi(key.substr(0, pos).c_str());
+}
+
+static std::string cameraIdFromPipelineKey(const std::string& key) {
+    auto pos = key.find(':');
+    if (pos == std::string::npos) return key;
+    return key.substr(pos + 1);
+}
+
 
 void CameraManager::loadConfigs(const std::string& path) {
     std::ifstream f(path);
@@ -145,6 +379,7 @@ void CameraManager::loadConfigs(const std::string& path) {
             cfg.fps        = obj.value("fps",      30);
             cfg.quality    = obj.value("quality",  "medium");
             cfg.exposure   = obj.value("exposure", -1);
+            cfg.cropLeftHalf = obj.value("cropLeftHalf", false);
             configs_[id]   = cfg;
         }
     } catch (const std::exception& e) {
@@ -166,6 +401,7 @@ void CameraManager::saveConfigs(const std::string& path) const {
             {"fps",        cfg.fps},
             {"quality",    cfg.quality},
             {"exposure",   cfg.exposure},
+            {"cropLeftHalf", cfg.cropLeftHalf},
         };
     }
     std::ofstream f(path);
@@ -174,6 +410,8 @@ void CameraManager::saveConfigs(const std::string& path) const {
 
 void CameraManager::discoverCameras() {
     int nextId = 0;
+    activeCameraIds_.clear();
+    capabilities_.clear();
 
     // Find an existing config for a discovered device.
     // Prefers usbPath match (stable across reboots) over devicePath match (fallback
@@ -210,12 +448,14 @@ void CameraManager::discoverCameras() {
 
     gst_device_monitor_stop(monitor);
 
+    std::vector<DiscoveryCandidate> candidates;
     int idx = 0;
     for (GList* l = devices; l; l = l->next, ++idx) {
         GstDevice* device = GST_DEVICE(l->data);
 
         gchar* displayName = gst_device_get_display_name(device);
-        std::cout << "  [" << idx << "] " << (displayName ? displayName : "(null)") << std::endl;
+        std::string display = displayName ? displayName : "";
+        std::cout << "  [" << idx << "] name=\"" << (display.empty() ? "(null)" : display) << "\"" << std::endl;
         g_free(displayName);
 
         std::string devicePath;
@@ -242,83 +482,257 @@ void CameraManager::discoverCameras() {
         }
 
         if (devicePath.empty()) {
-            std::cerr << "    -> could not determine device path, skipping" << std::endl;
+            std::cerr << "    -> path=(unknown) key=(unknown) skipped: could not determine device path" << std::endl;
             continue;
         }
 
         std::string usbPath = resolveUsbPath(devicePath);
 
         GstCaps* caps = gst_device_get_caps(device);
-        capabilities_[devicePath] = parseCaps(caps);
+        std::vector<CameraMode> modes = parseCaps(caps);
         if (caps) gst_caps_unref(caps);
-        std::cout << "    -> " << capabilities_[devicePath].size() << " mode(s) discovered"
-                  << (usbPath.empty() ? "" : " usb=" + usbPath) << std::endl;
 
-        auto it = findExisting(devicePath, usbPath);
-        if (it != configs_.end()) {
-            if (it->second.devicePath != devicePath) {
-                std::cout << "    -> \"" << it->first << "\" device path updated "
-                          << it->second.devicePath << " -> " << devicePath << std::endl;
-                it->second.devicePath = devicePath;
-            } else {
-                std::cout << "    -> already registered as \"" << it->first << "\"" << std::endl;
-            }
-            if (it->second.usbPath.empty() && !usbPath.empty())
-                it->second.usbPath = usbPath;
-        } else {
-            std::string name = generateName();
-            std::cout << "    -> registered as \"" << name << "\" path=" << devicePath << std::endl;
-            auto& cfg = configs_[name];
-            cfg.devicePath = devicePath;
-            cfg.usbPath    = usbPath;
-            // default to lowest MJPEG resolution (modes[0] after ascending sort)
-            const auto& modes = capabilities_[devicePath];
-            if (!modes.empty()) {
-                cfg.format = modes[0].format;
-                cfg.width  = modes[0].width;
-                cfg.height = modes[0].height;
-                cfg.fps    = modes[0].maxFps;
-            }
+        DiscoveryCandidate candidate;
+        candidate.idx = idx;
+        candidate.displayName = display;
+        candidate.devicePath = devicePath;
+        candidate.usbPath = usbPath;
+        candidate.physicalKey = makePhysicalKey(display, devicePath, usbPath);
+        candidate.modes = std::move(modes);
+        candidate.cropLeftHalf = shouldCropLeftHalf(candidate.displayName, candidate.modes);
+
+        std::cout << "    -> path=" << candidate.devicePath
+                  << " key=" << candidate.physicalKey
+                  << " modes=" << candidate.modes.size()
+                  << (candidate.cropLeftHalf ? " crop=left-half" : "")
+                  << std::endl;
+
+        if (looksLikeMetadataNode(candidate)) {
+            std::cout << "    -> skipped: no usable capture modes"
+                      << (isZedDevice(candidate.displayName) ? " (ZED metadata/non-capture node)" : "")
+                      << std::endl;
+            continue;
         }
+
+        candidates.push_back(std::move(candidate));
+    }
+
+    std::map<std::string, DiscoveryCandidate> accepted;
+    for (const auto& candidate : candidates) {
+        auto [it, inserted] = accepted.emplace(candidate.physicalKey, candidate);
+        if (!inserted && isBetterRepresentative(candidate, it->second)) {
+            std::cout << "  duplicate physical camera key=" << candidate.physicalKey
+                      << ": replacing " << it->second.devicePath
+                      << " with " << candidate.devicePath;
+            if (isZedDevice(candidate.displayName))
+                std::cout << " (ZED left/preferred view)";
+            std::cout << std::endl;
+            it->second = candidate;
+        } else if (!inserted) {
+            std::cout << "  duplicate physical camera key=" << candidate.physicalKey
+                      << ": skipped path=" << candidate.devicePath
+                      << " name=\"" << candidate.displayName << "\"";
+            if (isZedDevice(candidate.displayName))
+                std::cout << " (ZED non-left/duplicate view)";
+            std::cout << std::endl;
+        }
+    }
+
+    for (const auto& [key, candidate] : accepted) {
+        capabilities_[candidate.devicePath] = candidate.modes;
+
+        auto it = findExisting(candidate.devicePath, candidate.usbPath);
+        if (it != configs_.end()) {
+            if (it->second.devicePath != candidate.devicePath) {
+                std::cout << "  accepted name=\"" << candidate.displayName
+                          << "\" path=" << candidate.devicePath
+                          << " key=" << candidate.physicalKey
+                          << " as \"" << it->first << "\" (path updated from "
+                          << it->second.devicePath << ")" << std::endl;
+                it->second.devicePath = candidate.devicePath;
+            } else {
+                std::cout << "  accepted name=\"" << candidate.displayName
+                          << "\" path=" << candidate.devicePath
+                          << " key=" << candidate.physicalKey
+                          << " as \"" << it->first << "\"" << std::endl;
+            }
+            if (it->second.usbPath.empty() && !candidate.usbPath.empty())
+                it->second.usbPath = candidate.usbPath;
+            it->second.cropLeftHalf = candidate.cropLeftHalf;
+            validateConfigMode(it->first, it->second, candidate.modes);
+            activeCameraIds_.insert(it->first);
+            continue;
+        }
+
+        std::string name = generateName();
+        auto& cfg = configs_[name];
+        cfg.devicePath = candidate.devicePath;
+        cfg.usbPath = candidate.usbPath;
+        cfg.quality = "low";
+        cfg.fps = 10;
+        cfg.cropLeftHalf = candidate.cropLeftHalf;
+
+        const auto& modes = candidate.modes;
+        if (!modes.empty()) {
+            cfg.format = modes[0].format;
+            cfg.width = modes[0].width;
+            cfg.height = modes[0].height;
+            cfg.fps = chooseSupportedFps(cfg.fps, modes[0]);
+        }
+
+        activeCameraIds_.insert(name);
+        std::cout << "  accepted name=\"" << candidate.displayName
+                  << "\" path=" << candidate.devicePath
+                  << " key=" << candidate.physicalKey
+                  << " registered as \"" << name << "\""
+                  << " default=" << cfg.format << " "
+                  << cfg.width << "x" << cfg.height
+                  << "@" << cfg.fps << " quality=" << cfg.quality
+                  << (cfg.cropLeftHalf ? " crop=left-half" : "")
+                  << std::endl;
+    }
+
+    for (auto it = pipelines_.begin(); it != pipelines_.end(); ) {
+        if (activeCameraIds_.count(cameraIdFromPipelineKey(it->first))) {
+            ++it;
+            continue;
+        }
+        std::cerr << "discovery: disabling stale active pipeline \"" << it->first
+                  << "\" because its device is no longer accepted" << std::endl;
+        it = pipelines_.erase(it);
+    }
+
+    for (const auto& [id, cfg] : configs_) {
+        if (activeCameraIds_.count(id)) continue;
+        std::cout << "  persisted config \"" << id << "\" path=" << cfg.devicePath
+                  << " usb=" << (cfg.usbPath.empty() ? "(none)" : cfg.usbPath)
+                  << " not sent to GUI: device not currently discovered/accepted"
+                  << std::endl;
     }
 
     g_list_free_full(devices, gst_object_unref);
     gst_object_unref(monitor);
+    logConfigConflicts(configs_);
 }
 
-void CameraManager::enableCamera(const std::string& id) {
+bool CameraManager::isEnabled(const std::string& id) const {
+    return viewerCount(id) > 0;
+}
+
+bool CameraManager::isEnabledForClient(int clientId, const std::string& id) const {
+    return pipelines_.count(pipelineKey(clientId, id)) > 0;
+}
+
+int CameraManager::viewerCount(const std::string& id) const {
+    int count = 0;
+    for (const auto& [key, _] : pipelines_) {
+        if (cameraIdFromPipelineKey(key) == id)
+            ++count;
+    }
+    return count;
+}
+
+void CameraManager::enableCamera(int clientId, const std::string& id) {
     auto it = configs_.find(id);
     if (it == configs_.end()) {
-        std::cerr << "enableCamera: unknown id: " << id << std::endl;
+        std::cerr << "enableCamera: unknown id: " << id << " client=" << clientId << std::endl;
+        return;
+    }
+    if (!activeCameraIds_.count(id)) {
+        std::cerr << "enableCamera: refusing inactive/stale id: " << id
+                  << " client=" << clientId << std::endl;
         return;
     }
 
-    if (pipelines_.count(id)) disableCamera(id);
+    if (!devicePathExists(it->second.devicePath)) {
+        std::cerr << "enableCamera: device path missing for client=" << clientId
+                  << " camera=" << id
+                  << " path=" << it->second.devicePath
+                  << "; rediscovering cameras" << std::endl;
+        discoverCameras();
 
-    auto pipeline = std::make_unique<CameraPipeline>(it->second, stunServer_);
+        it = configs_.find(id);
+        if (it == configs_.end() || !activeCameraIds_.count(id) ||
+            !devicePathExists(it->second.devicePath)) {
+            std::cerr << "enableCamera: refusing camera after rediscovery for client="
+                      << clientId << " camera=" << id
+                      << " because its device is not currently present" << std::endl;
+            return;
+        }
 
-    if (onOffer_) {
-        pipeline->setOnOfferCreatedCallback([this, id](const std::string& sdp) {
-            onOffer_(id, sdp);
+        std::cerr << "enableCamera: rediscovery mapped client=" << clientId
+                  << " camera=" << id
+                  << " to path=" << it->second.devicePath << std::endl;
+    }
+
+    const std::string key = pipelineKey(clientId, id);
+    if (pipelines_.count(key)) disableCamera(clientId, id);
+
+    std::string lastError;
+    constexpr int kMaxAttempts = 3;
+    for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+        auto pipeline = std::make_unique<CameraPipeline>(it->second, stunServer_);
+
+        if (onOffer_) {
+            pipeline->setOnOfferCreatedCallback([this, clientId, id](const std::string& sdp) {
+                std::cout << "Routing offer: client=" << clientId << " camera=" << id << std::endl;
+                onOffer_(clientId, id, sdp);
+            });
+        }
+        if (onIce_) {
+            pipeline->setOnIceCandidateCallback([this, clientId, id](const std::string& candidate, int mline) {
+                std::cout << "Routing ICE: client=" << clientId << " camera=" << id << std::endl;
+                onIce_(clientId, id, candidate, mline);
+            });
+        }
+        pipeline->setOnErrorCallback([clientId, id](const std::string& message) {
+            std::cerr << "Pipeline error for client=" << clientId
+                      << " camera=" << id << ": " << message << std::endl;
         });
-    }
-    if (onIce_) {
-        pipeline->setOnIceCandidateCallback([this, id](const std::string& candidate, int mline) {
-            onIce_(id, candidate, mline);
-        });
+
+        if (pipeline->start()) {
+            pipelines_[key] = std::move(pipeline);
+            std::cout << "Camera enabled: client=" << clientId
+                      << " camera=" << id
+                      << " viewers=" << viewerCount(id) << std::endl;
+            return;
+        }
+
+        lastError = pipeline->getLastError();
+        if (attempt < kMaxAttempts && containsBusyError(lastError)) {
+            std::cerr << "Retrying camera " << id << " for client " << clientId
+                      << " after busy/allocation error"
+                      << " (attempt " << (attempt + 1) << "/" << kMaxAttempts << ")"
+                      << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(350));
+            continue;
+        }
+
+        break;
     }
 
-    if (pipeline->start()) {
-        pipelines_[id] = std::move(pipeline);
-        std::cout << "Camera enabled: " << id << std::endl;
-    } else {
-        std::cerr << "Failed to start pipeline for: " << id << std::endl;
-    }
+    std::cerr << "Failed to start pipeline for client=" << clientId << " camera=" << id;
+    if (!lastError.empty()) std::cerr << " (" << lastError << ")";
+    std::cerr << std::endl;
 }
 
-void CameraManager::disableCamera(const std::string& id) {
-    pipelines_.erase(id);
-    std::cout << "Camera disabled: " << id << std::endl;
+void CameraManager::disableCamera(int clientId, const std::string& id) {
+    pipelines_.erase(pipelineKey(clientId, id));
+    std::cout << "Camera disabled: client=" << clientId
+              << " camera=" << id
+              << " viewers=" << viewerCount(id) << std::endl;
+}
+
+void CameraManager::disconnectClient(int clientId) {
+    for (auto it = pipelines_.begin(); it != pipelines_.end(); ) {
+        if (clientIdFromPipelineKey(it->first) == clientId) {
+            std::cout << "Removing pipeline for disconnected client=" << clientId
+                      << " camera=" << cameraIdFromPipelineKey(it->first) << std::endl;
+            it = pipelines_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 bool CameraManager::renameCamera(const std::string& id, const std::string& newName) {
@@ -326,22 +740,35 @@ bool CameraManager::renameCamera(const std::string& id, const std::string& newNa
     if (!configs_.count(id))     return false;
     if (configs_.count(newName)) return false;
 
-    bool wasEnabled = pipelines_.count(id) > 0;
-    if (wasEnabled) disableCamera(id);
+    std::vector<int> enabledClients;
+    for (const auto& [key, _] : pipelines_) {
+        if (cameraIdFromPipelineKey(key) == id)
+            enabledClients.push_back(clientIdFromPipelineKey(key));
+    }
+    for (int clientId : enabledClients)
+        disableCamera(clientId, id);
 
     configs_[newName] = configs_[id];
     configs_.erase(id);
+    if (activeCameraIds_.erase(id))
+        activeCameraIds_.insert(newName);
 
-    if (wasEnabled) enableCamera(newName);
+    for (int clientId : enabledClients)
+        enableCamera(clientId, newName);
     return true;
 }
 
 bool CameraManager::updateConfig(const std::string& id, const CameraConfig& config) {
     if (!configs_.count(id)) return false;
+    std::vector<int> enabledClients;
+    for (const auto& [key, _] : pipelines_) {
+        if (cameraIdFromPipelineKey(key) == id)
+            enabledClients.push_back(clientIdFromPipelineKey(key));
+    }
     configs_[id] = config;
-    if (pipelines_.count(id)) {
-        disableCamera(id);
-        enableCamera(id);
+    for (int clientId : enabledClients) {
+        disableCamera(clientId, id);
+        enableCamera(clientId, id);
     }
     return true;
 }
@@ -360,7 +787,7 @@ bool CameraManager::applyConfigPatch(const std::string& id, const json& patch) {
         if (capIt != capabilities_.end()) {
             for (const auto& mode : capIt->second) {
                 if (mode.format == cfg.format && mode.width == cfg.width && mode.height == cfg.height) {
-                    cfg.fps = std::min(cfg.fps, mode.maxFps);
+                    cfg.fps = chooseSupportedFps(cfg.fps, mode);
                     break;
                 }
             }
@@ -370,26 +797,37 @@ bool CameraManager::applyConfigPatch(const std::string& id, const json& patch) {
     if (patch.contains("quality"))  { cfg.quality  = patch["quality"].get<std::string>(); pipelineChange = true; }
     if (patch.contains("exposure")) { cfg.exposure = patch["exposure"];                    pipelineChange = true; }
     if (patch.contains("role"))       cfg.role     = patch["role"].get<std::string>();
-    if (pipelineChange && pipelines_.count(id)) {
-        disableCamera(id);
-        enableCamera(id);
+    if (pipelineChange && isEnabled(id)) {
+        std::vector<int> enabledClients;
+        for (const auto& [key, _] : pipelines_) {
+            if (cameraIdFromPipelineKey(key) == id)
+                enabledClients.push_back(clientIdFromPipelineKey(key));
+        }
+        for (int clientId : enabledClients) {
+            disableCamera(clientId, id);
+            enableCamera(clientId, id);
+        }
     }
     return true;
 }
 
-void CameraManager::setRemoteAnswer(const std::string& id, const std::string& sdp) {
-    auto it = pipelines_.find(id);
+void CameraManager::setRemoteAnswer(int clientId, const std::string& id, const std::string& sdp) {
+    std::cout << "Routing answer: client=" << clientId << " camera=" << id << std::endl;
+    auto it = pipelines_.find(pipelineKey(clientId, id));
     if (it != pipelines_.end()) it->second->setRemoteAnswer(sdp);
 }
 
-void CameraManager::addIceCandidate(const std::string& id, const std::string& candidate, int sdpMLineIndex) {
-    auto it = pipelines_.find(id);
+void CameraManager::addIceCandidate(int clientId, const std::string& id, const std::string& candidate, int sdpMLineIndex) {
+    std::cout << "Routing remote ICE: client=" << clientId << " camera=" << id << std::endl;
+    auto it = pipelines_.find(pipelineKey(clientId, id));
     if (it != pipelines_.end()) it->second->addIceCandidate(candidate, sdpMLineIndex);
 }
 
-std::string CameraManager::buildStateJson() const {
+std::string CameraManager::buildStateJson(int clientId) const {
     json cameras = json::array();
     for (const auto& [id, cfg] : configs_) {
+        if (!activeCameraIds_.count(id)) continue;
+
         json caps = json::array();
         auto capIt = capabilities_.find(cfg.devicePath);
         if (capIt != capabilities_.end()) {
@@ -409,21 +847,52 @@ std::string CameraManager::buildStateJson() const {
             {"devicePath",   cfg.devicePath},
             {"usbPath",      cfg.usbPath},
             {"format",       cfg.format},
-            {"enabled",      pipelines_.count(id) > 0},
+            {"enabled",      clientId >= 0 ? isEnabledForClient(clientId, id) : isEnabled(id)},
+            {"viewerCount",  viewerCount(id)},
             {"width",        cfg.width},
             {"height",       cfg.height},
             {"fps",          cfg.fps},
             {"quality",      cfg.quality},
             {"bitrate",      cfg.computeBitrate()},
             {"exposure",     cfg.exposure},
+            {"cropLeftHalf",  cfg.cropLeftHalf},
             {"capabilities", caps},
         });
     }
     return json{{"type", "state"}, {"cameras", cameras}}.dump();
 }
 
-PipelineStats CameraManager::getCameraStats(const std::string& id) {
-    auto it = pipelines_.find(id);
+PipelineStats CameraManager::getCameraStats(int clientId, const std::string& id) {
+    auto it = pipelines_.find(pipelineKey(clientId, id));
     if (it != pipelines_.end()) return it->second->getStats();
     return {};
+}
+
+std::vector<std::pair<int, std::string>> CameraManager::getActiveViews() const {
+    std::vector<std::pair<int, std::string>> views;
+    for (const auto& [key, _] : pipelines_)
+        views.push_back({clientIdFromPipelineKey(key), cameraIdFromPipelineKey(key)});
+    return views;
+}
+
+bool CameraManager::reapFailedPipelines() {
+    bool changed = false;
+    for (auto it = pipelines_.begin(); it != pipelines_.end(); ) {
+        if (!it->second->hasFailed()) {
+            ++it;
+            continue;
+        }
+
+        int clientId = clientIdFromPipelineKey(it->first);
+        std::string cameraId = cameraIdFromPipelineKey(it->first);
+        std::cerr << "Camera disabled after pipeline failure: client="
+                  << clientId << " camera=" << cameraId;
+        const std::string err = it->second->getLastError();
+        if (!err.empty()) std::cerr << " (" << err << ")";
+        std::cerr << std::endl;
+
+        it = pipelines_.erase(it);
+        changed = true;
+    }
+    return changed;
 }
