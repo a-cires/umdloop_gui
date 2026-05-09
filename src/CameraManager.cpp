@@ -12,6 +12,7 @@
 #  include <climits>
 #  include <cstdlib>
 #  include <sstream>
+#  include <unistd.h>
 #endif
 
 using json = nlohmann::json;
@@ -42,6 +43,16 @@ static int videoDeviceIndex(const std::string& devPath) {
     if (n.empty() || !std::all_of(n.begin(), n.end(), [](unsigned char c) { return std::isdigit(c); }))
         return 100000;
     return std::atoi(n.c_str());
+}
+
+static bool devicePathExists(const std::string& devPath) {
+#ifdef __linux__
+    if (devPath.rfind("/dev/", 0) != 0) return true;
+    return access(devPath.c_str(), F_OK) == 0;
+#else
+    (void)devPath;
+    return true;
+#endif
 }
 
 // Returns a stable USB topology string (e.g. "usb:1-1.2") for a v4l2 device
@@ -631,6 +642,27 @@ void CameraManager::enableCamera(int clientId, const std::string& id) {
         std::cerr << "enableCamera: refusing inactive/stale id: " << id
                   << " client=" << clientId << std::endl;
         return;
+    }
+
+    if (!devicePathExists(it->second.devicePath)) {
+        std::cerr << "enableCamera: device path missing for client=" << clientId
+                  << " camera=" << id
+                  << " path=" << it->second.devicePath
+                  << "; rediscovering cameras" << std::endl;
+        discoverCameras();
+
+        it = configs_.find(id);
+        if (it == configs_.end() || !activeCameraIds_.count(id) ||
+            !devicePathExists(it->second.devicePath)) {
+            std::cerr << "enableCamera: refusing camera after rediscovery for client="
+                      << clientId << " camera=" << id
+                      << " because its device is not currently present" << std::endl;
+            return;
+        }
+
+        std::cerr << "enableCamera: rediscovery mapped client=" << clientId
+                  << " camera=" << id
+                  << " to path=" << it->second.devicePath << std::endl;
     }
 
     const std::string key = pipelineKey(clientId, id);
