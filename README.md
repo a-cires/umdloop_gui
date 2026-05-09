@@ -56,3 +56,18 @@ duplicate nodes from the same physical camera are not sent.
 For a ZED 2i, only the selected left/preferred capture node should be accepted.
 Right-view, metadata, and duplicate nodes should appear as skipped discovery
 entries in the backend log.
+
+If a camera fails with `Failed to allocate required memory` from `gstv4l2src`,
+the V4L2/USB buffer pool is exhausted before WebRTC starts. On Jetson/Linux,
+check the kernel USB memory setting:
+
+```bash
+cat /sys/module/usbcore/parameters/usbfs_memory_mb
+sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+lsusb -t
+```
+
+If all cameras sit behind one hub/controller, split them across controllers or
+powered hubs. Some UVC cameras only advertise `640x360@30`, so the backend
+cannot force a lower source FPS for those devices even when outgoing WebRTC
+quality is low.

@@ -24,6 +24,12 @@ static void removeSourceIfActive(guint& sourceId) {
     sourceId = 0;
 }
 
+static bool isV4l2AllocationError(const std::string& message) {
+    return message.find("Failed to allocate required memory") != std::string::npos ||
+           message.find("Buffer pool activation failed") != std::string::npos ||
+           message.find("gstv4l2src_decide_allocation") != std::string::npos;
+}
+
 
 static std::string buildPipelineString(const CameraConfig& cfg, const PlatformSpecifics& specs) {
     const bool isMjpg = (cfg.format == "MJPG");
@@ -35,7 +41,7 @@ static std::string buildPipelineString(const CameraConfig& cfg, const PlatformSp
               " ! video/x-raw,width=640,height=480,framerate=30/1"
               " ! timeoverlay";
     } else if (specs.source == "v4l2src") {
-        src = "v4l2src name=src device=" + cfg.devicePath + " !";
+        src = "v4l2src name=src io-mode=2 do-timestamp=true device=" + cfg.devicePath + " !";
         if (isMjpg) {
             src += " image/jpeg"
                    ",width="  + std::to_string(cfg.width) +
@@ -323,6 +329,12 @@ gboolean CameraPipeline::onBusMessage(GstBus*, GstMessage* message, gpointer use
         self->failed_.store(true);
         self->busWatchId_ = 0;
         std::cerr << "[" << timestamp() << "] " << text << std::endl;
+        if (isV4l2AllocationError(text)) {
+            std::cerr << "[" << timestamp() << "] V4L2 allocation hint: this usually means USB/V4L2 buffer "
+                      << "memory or bus bandwidth is exhausted. Check "
+                      << "/sys/module/usbcore/parameters/usbfs_memory_mb, split cameras across USB "
+                      << "controllers/hubs, or use a lower camera source mode." << std::endl;
+        }
         if (self->onError_) self->onError_(text);
 
         if (err) g_error_free(err);

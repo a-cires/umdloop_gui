@@ -205,7 +205,9 @@ static std::vector<CameraMode> parseCaps(GstCaps* caps) {
 static bool containsBusyError(const std::string& message) {
     return message.find("Device or resource busy") != std::string::npos ||
            message.find("Resource busy") != std::string::npos ||
-           message.find("resource busy") != std::string::npos;
+           message.find("resource busy") != std::string::npos ||
+           message.find("Failed to allocate required memory") != std::string::npos ||
+           message.find("Buffer pool activation failed") != std::string::npos;
 }
 
 static bool isZedDevice(const std::string& displayName) {
