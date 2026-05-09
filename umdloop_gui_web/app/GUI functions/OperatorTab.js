@@ -8,10 +8,19 @@ import MissionPanel from "./MissionPanel";
 import { CAMERA_ROLES } from "./pageConstants";
 
 const RAMAN_WS_URL = "ws://localhost:5001/ws/spectrum";
+const CAMERA_ROTATIONS_STORAGE_KEY = "umdloop.cameraRotations";
 
 export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem }) {
   const [fullscreenCam, setFullscreenCam] = useState(null);
   const [cameraRotateDeg, setCameraRotateDeg] = useState(0);
+  const [cameraRotationByKey, setCameraRotationByKey] = useState(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      return JSON.parse(window.localStorage.getItem(CAMERA_ROTATIONS_STORAGE_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  });
   const [emergencyStop, setEmergencyStop] = useState(false);
   const [armClampDistance, setArmClampDistance] = useState(35);
   const [panoramaShots, setPanoramaShots] = useState(0);
@@ -49,6 +58,16 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
   }, []);
 
   useEffect(() => {
+    window.localStorage.setItem(CAMERA_ROTATIONS_STORAGE_KEY, JSON.stringify(cameraRotationByKey));
+  }, [cameraRotationByKey]);
+
+  useEffect(() => {
+    if (!fullscreenCam) return;
+    const cameraKey = fullscreenCam.role ?? fullscreenCam.label;
+    setCameraRotateDeg(cameraRotationByKey[cameraKey] ?? 0);
+  }, [fullscreenCam, cameraRotationByKey]);
+
+  useEffect(() => {
     if (!stopwatchRunning) return undefined;
 
     const intervalId = window.setInterval(() => {
@@ -84,6 +103,25 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
     setStopwatchRunning(false);
   };
 
+  const updateFullscreenRotation = (getNextRotation) => {
+    const cameraKey = fullscreenCam?.role ?? fullscreenCam?.label;
+    setCameraRotateDeg((currentRotation) => {
+      const nextRotation = typeof getNextRotation === "function"
+        ? getNextRotation(currentRotation)
+        : getNextRotation;
+      const normalizedRotation = ((nextRotation % 360) + 360) % 360;
+
+      if (cameraKey) {
+        setCameraRotationByKey((prev) => ({
+          ...prev,
+          [cameraKey]: normalizedRotation,
+        }));
+      }
+
+      return normalizedRotation;
+    });
+  };
+
   const FullscreenOverlay = () =>
     fullscreenCam && (
       <div
@@ -100,7 +138,33 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
           padding: "20px",
         }}
       >
-        <h2 style={{ color: "white", fontSize: "22px", fontWeight: "bold", marginBottom: "12px" }}>{fullscreenCam.label}</h2>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "center", marginBottom: 12 }}
+        >
+          <h2 style={{ color: "white", fontSize: "22px", fontWeight: "bold", margin: 0 }}>{fullscreenCam.label}</h2>
+          <button
+            type="button"
+            onClick={() => updateFullscreenRotation((d) => d - 90)}
+            style={{ borderRadius: 8, border: "1px solid #666", background: "#303030", color: "white", cursor: "pointer", padding: "7px 11px", fontWeight: 800 }}
+          >
+            -90°
+          </button>
+          <button
+            type="button"
+            onClick={() => updateFullscreenRotation((d) => d + 90)}
+            style={{ borderRadius: 8, border: "1px solid #666", background: "#303030", color: "white", cursor: "pointer", padding: "7px 11px", fontWeight: 800 }}
+          >
+            +90°
+          </button>
+          <button
+            type="button"
+            onClick={() => updateFullscreenRotation(0)}
+            style={{ borderRadius: 8, border: "1px solid #666", background: "#303030", color: "white", cursor: "pointer", padding: "7px 11px", fontWeight: 800 }}
+          >
+            Reset
+          </button>
+        </div>
         <div style={{ width: "min(1000px, 95vw)", height: "80vh" }}>
           <CameraFeed
             role={fullscreenCam.role}
@@ -310,10 +374,10 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
 
   if (selectedSubsystem === "Drive (Default)" || selectedSubsystem === "Drive") {
     const wheelGroups = [
-      { label: "Top Left Wheel", role: CAMERA_ROLES.WHEEL_TL_A },
-      { label: "Top Right Wheel", role: CAMERA_ROLES.WHEEL_TR_A },
-      { label: "Bottom Left Wheel", role: CAMERA_ROLES.WHEEL_BL_A },
-      { label: "Bottom Right Wheel", role: CAMERA_ROLES.WHEEL_BR_A },
+      { label: "Top Left Wheel", role: CAMERA_ROLES.WHEEL_TL },
+      { label: "Top Right Wheel", role: CAMERA_ROLES.WHEEL_TR },
+      { label: "Bottom Left Wheel", role: CAMERA_ROLES.WHEEL_BL },
+      { label: "Bottom Right Wheel", role: CAMERA_ROLES.WHEEL_BR },
     ];
 
     return (
