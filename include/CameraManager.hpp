@@ -3,6 +3,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -49,6 +50,7 @@ private:
     std::map<std::string, CameraConfig>                    configs_;
     std::map<std::string, std::unique_ptr<CameraPipeline>> pipelines_;
     std::map<std::string, std::vector<CameraMode>>         capabilities_;
+    std::set<std::string>                                  activeCameraIds_;
     OnOfferCallback onOffer_;
     OnIceCallback   onIce_;
     std::string     stunServer_;

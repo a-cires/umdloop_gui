@@ -1,9 +1,12 @@
 #include "CameraManager.hpp"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <gst/gst.h>
 #include <iostream>
+#include <map>
 #include <thread>
 #ifdef __linux__
 #  include <climits>
@@ -12,6 +15,33 @@
 #endif
 
 using json = nlohmann::json;
+
+struct DiscoveryCandidate {
+    int idx = 0;
+    std::string displayName;
+    std::string devicePath;
+    std::string usbPath;
+    std::string physicalKey;
+    std::vector<CameraMode> modes;
+};
+
+static std::string lowerCopy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
+
+static int videoDeviceIndex(const std::string& devPath) {
+    const std::string prefix = "/dev/video";
+    auto pos = devPath.rfind(prefix);
+    if (pos == std::string::npos) return 100000;
+
+    const std::string n = devPath.substr(pos + prefix.size());
+    if (n.empty() || !std::all_of(n.begin(), n.end(), [](unsigned char c) { return std::isdigit(c); }))
+        return 100000;
+    return std::atoi(n.c_str());
+}
 
 // Returns a stable USB topology string (e.g. "usb:1-1.2") for a v4l2 device
 // by resolving its sysfs symlink and extracting the USB port path.
@@ -134,6 +164,50 @@ static bool containsBusyError(const std::string& message) {
            message.find("resource busy") != std::string::npos;
 }
 
+static std::string makePhysicalKey(const std::string& displayName,
+                                   const std::string& devicePath,
+                                   const std::string& usbPath) {
+    if (!usbPath.empty()) return usbPath;
+    if (!displayName.empty()) return "name:" + lowerCopy(displayName);
+    return devicePath;
+}
+
+static bool isZedDevice(const std::string& displayName) {
+    std::string name = lowerCopy(displayName);
+    return name.find("zed") != std::string::npos;
+}
+
+static bool looksLikeMetadataNode(const DiscoveryCandidate& c) {
+    std::string name = lowerCopy(c.displayName);
+    return name.find("metadata") != std::string::npos ||
+           name.find("meta") != std::string::npos ||
+           c.modes.empty();
+}
+
+static bool isBetterRepresentative(const DiscoveryCandidate& candidate,
+                                   const DiscoveryCandidate& current) {
+    const bool candidateZed = isZedDevice(candidate.displayName);
+    const bool currentZed = isZedDevice(current.displayName);
+
+    if (candidateZed || currentZed) {
+        std::string candidateName = lowerCopy(candidate.displayName);
+        std::string currentName = lowerCopy(current.displayName);
+        const bool candidateLeft = candidateName.find("left") != std::string::npos;
+        const bool currentLeft = currentName.find("left") != std::string::npos;
+        if (candidateLeft != currentLeft) return candidateLeft;
+
+        const bool candidateRight = candidateName.find("right") != std::string::npos;
+        const bool currentRight = currentName.find("right") != std::string::npos;
+        if (candidateRight != currentRight) return !candidateRight;
+    }
+
+    int candidateIndex = videoDeviceIndex(candidate.devicePath);
+    int currentIndex = videoDeviceIndex(current.devicePath);
+    if (candidateIndex != currentIndex) return candidateIndex < currentIndex;
+
+    return candidate.idx < current.idx;
+}
+
 static void validateConfigMode(const std::string& id,
                                CameraConfig& cfg,
                                const std::vector<CameraMode>& modes) {
@@ -246,6 +320,8 @@ void CameraManager::saveConfigs(const std::string& path) const {
 
 void CameraManager::discoverCameras() {
     int nextId = 0;
+    activeCameraIds_.clear();
+    capabilities_.clear();
 
     // Find an existing config for a discovered device.
     // Prefers usbPath match (stable across reboots) over devicePath match (fallback
@@ -282,12 +358,14 @@ void CameraManager::discoverCameras() {
 
     gst_device_monitor_stop(monitor);
 
+    std::vector<DiscoveryCandidate> candidates;
     int idx = 0;
     for (GList* l = devices; l; l = l->next, ++idx) {
         GstDevice* device = GST_DEVICE(l->data);
 
         gchar* displayName = gst_device_get_display_name(device);
-        std::cout << "  [" << idx << "] " << (displayName ? displayName : "(null)") << std::endl;
+        std::string display = displayName ? displayName : "";
+        std::cout << "  [" << idx << "] name=\"" << (display.empty() ? "(null)" : display) << "\"" << std::endl;
         g_free(displayName);
 
         std::string devicePath;
@@ -314,45 +392,126 @@ void CameraManager::discoverCameras() {
         }
 
         if (devicePath.empty()) {
-            std::cerr << "    -> could not determine device path, skipping" << std::endl;
+            std::cerr << "    -> path=(unknown) key=(unknown) skipped: could not determine device path" << std::endl;
             continue;
         }
 
         std::string usbPath = resolveUsbPath(devicePath);
 
         GstCaps* caps = gst_device_get_caps(device);
-        capabilities_[devicePath] = parseCaps(caps);
+        std::vector<CameraMode> modes = parseCaps(caps);
         if (caps) gst_caps_unref(caps);
-        std::cout << "    -> " << capabilities_[devicePath].size() << " mode(s) discovered"
-                  << (usbPath.empty() ? "" : " usb=" + usbPath) << std::endl;
 
-        auto it = findExisting(devicePath, usbPath);
-        if (it != configs_.end()) {
-            if (it->second.devicePath != devicePath) {
-                std::cout << "    -> \"" << it->first << "\" device path updated "
-                          << it->second.devicePath << " -> " << devicePath << std::endl;
-                it->second.devicePath = devicePath;
-            } else {
-                std::cout << "    -> already registered as \"" << it->first << "\"" << std::endl;
-            }
-            if (it->second.usbPath.empty() && !usbPath.empty())
-                it->second.usbPath = usbPath;
-            validateConfigMode(it->first, it->second, capabilities_[devicePath]);
-        } else {
-            std::string name = generateName();
-            std::cout << "    -> registered as \"" << name << "\" path=" << devicePath << std::endl;
-            auto& cfg = configs_[name];
-            cfg.devicePath = devicePath;
-            cfg.usbPath    = usbPath;
-            // default to lowest MJPEG resolution (modes[0] after ascending sort)
-            const auto& modes = capabilities_[devicePath];
-            if (!modes.empty()) {
-                cfg.format = modes[0].format;
-                cfg.width  = modes[0].width;
-                cfg.height = modes[0].height;
-                cfg.fps    = modes[0].maxFps;
-            }
+        DiscoveryCandidate candidate;
+        candidate.idx = idx;
+        candidate.displayName = display;
+        candidate.devicePath = devicePath;
+        candidate.usbPath = usbPath;
+        candidate.physicalKey = makePhysicalKey(display, devicePath, usbPath);
+        candidate.modes = std::move(modes);
+
+        std::cout << "    -> path=" << candidate.devicePath
+                  << " key=" << candidate.physicalKey
+                  << " modes=" << candidate.modes.size() << std::endl;
+
+        if (looksLikeMetadataNode(candidate)) {
+            std::cout << "    -> skipped: no usable capture modes"
+                      << (isZedDevice(candidate.displayName) ? " (ZED metadata/non-capture node)" : "")
+                      << std::endl;
+            continue;
         }
+
+        candidates.push_back(std::move(candidate));
+    }
+
+    std::map<std::string, DiscoveryCandidate> accepted;
+    for (const auto& candidate : candidates) {
+        auto [it, inserted] = accepted.emplace(candidate.physicalKey, candidate);
+        if (!inserted && isBetterRepresentative(candidate, it->second)) {
+            std::cout << "  duplicate physical camera key=" << candidate.physicalKey
+                      << ": replacing " << it->second.devicePath
+                      << " with " << candidate.devicePath;
+            if (isZedDevice(candidate.displayName))
+                std::cout << " (ZED left/preferred view)";
+            std::cout << std::endl;
+            it->second = candidate;
+        } else if (!inserted) {
+            std::cout << "  duplicate physical camera key=" << candidate.physicalKey
+                      << ": skipped path=" << candidate.devicePath
+                      << " name=\"" << candidate.displayName << "\"";
+            if (isZedDevice(candidate.displayName))
+                std::cout << " (ZED non-left/duplicate view)";
+            std::cout << std::endl;
+        }
+    }
+
+    for (const auto& [key, candidate] : accepted) {
+        capabilities_[candidate.devicePath] = candidate.modes;
+
+        auto it = findExisting(candidate.devicePath, candidate.usbPath);
+        if (it != configs_.end()) {
+            if (it->second.devicePath != candidate.devicePath) {
+                std::cout << "  accepted name=\"" << candidate.displayName
+                          << "\" path=" << candidate.devicePath
+                          << " key=" << candidate.physicalKey
+                          << " as \"" << it->first << "\" (path updated from "
+                          << it->second.devicePath << ")" << std::endl;
+                it->second.devicePath = candidate.devicePath;
+            } else {
+                std::cout << "  accepted name=\"" << candidate.displayName
+                          << "\" path=" << candidate.devicePath
+                          << " key=" << candidate.physicalKey
+                          << " as \"" << it->first << "\"" << std::endl;
+            }
+            if (it->second.usbPath.empty() && !candidate.usbPath.empty())
+                it->second.usbPath = candidate.usbPath;
+            validateConfigMode(it->first, it->second, candidate.modes);
+            activeCameraIds_.insert(it->first);
+            continue;
+        }
+
+        std::string name = generateName();
+        auto& cfg = configs_[name];
+        cfg.devicePath = candidate.devicePath;
+        cfg.usbPath = candidate.usbPath;
+        cfg.quality = "low";
+        cfg.fps = 10;
+
+        const auto& modes = candidate.modes;
+        if (!modes.empty()) {
+            cfg.format = modes[0].format;
+            cfg.width = modes[0].width;
+            cfg.height = modes[0].height;
+            cfg.fps = std::min(cfg.fps, modes[0].maxFps);
+        }
+
+        activeCameraIds_.insert(name);
+        std::cout << "  accepted name=\"" << candidate.displayName
+                  << "\" path=" << candidate.devicePath
+                  << " key=" << candidate.physicalKey
+                  << " registered as \"" << name << "\""
+                  << " default=" << cfg.format << " "
+                  << cfg.width << "x" << cfg.height
+                  << "@" << cfg.fps << " quality=" << cfg.quality
+                  << std::endl;
+    }
+
+    for (auto it = pipelines_.begin(); it != pipelines_.end(); ) {
+        if (activeCameraIds_.count(it->first)) {
+            ++it;
+            continue;
+        }
+        std::cerr << "discovery: disabling stale active pipeline \"" << it->first
+                  << "\" because its device is no longer accepted" << std::endl;
+        it = pipelines_.erase(it);
+    }
+
+    for (const auto& [id, cfg] : configs_) {
+        if (activeCameraIds_.count(id)) continue;
+        std::cout << "  persisted config \"" << id << "\" path=" << cfg.devicePath
+                  << " usb=" << (cfg.usbPath.empty() ? "(none)" : cfg.usbPath)
+                  << " not sent to GUI: device not currently discovered/accepted"
+                  << std::endl;
     }
 
     g_list_free_full(devices, gst_object_unref);
@@ -364,6 +523,10 @@ void CameraManager::enableCamera(const std::string& id) {
     auto it = configs_.find(id);
     if (it == configs_.end()) {
         std::cerr << "enableCamera: unknown id: " << id << std::endl;
+        return;
+    }
+    if (!activeCameraIds_.count(id)) {
+        std::cerr << "enableCamera: refusing inactive/stale id: " << id << std::endl;
         return;
     }
 
@@ -443,6 +606,8 @@ bool CameraManager::renameCamera(const std::string& id, const std::string& newNa
 
     configs_[newName] = configs_[id];
     configs_.erase(id);
+    if (activeCameraIds_.erase(id))
+        activeCameraIds_.insert(newName);
 
     if (wasEnabled) enableCamera(newName);
     return true;
@@ -502,6 +667,8 @@ void CameraManager::addIceCandidate(const std::string& id, const std::string& ca
 std::string CameraManager::buildStateJson() const {
     json cameras = json::array();
     for (const auto& [id, cfg] : configs_) {
+        if (!activeCameraIds_.count(id)) continue;
+
         json caps = json::array();
         auto capIt = capabilities_.find(cfg.devicePath);
         if (capIt != capabilities_.end()) {
