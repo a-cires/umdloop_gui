@@ -47,6 +47,7 @@ private:
     GstElement* pipeline_  = nullptr;
     GstElement* webrtcbin_ = nullptr;
     guint       busWatchId_ = 0;
+    guint       offerSourceId_ = 0;
 
     std::atomic<int>       frameCount_{0};
     std::atomic<long long> byteCount_{0};
@@ -61,6 +62,7 @@ private:
     OnErrorCallback onError_;
 
     static GstPadProbeReturn statsProbe(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
+    static gboolean doCreateOffer(gpointer data);
     static gboolean onBusMessage(GstBus* bus, GstMessage* message, gpointer user_data);
     static void onNegotiationNeeded(GstElement* webrtcbin, gpointer user_data);
     static void onIceCandidate(GstElement* webrtcbin, guint mlineindex, gchar* candidate, gpointer user_data);

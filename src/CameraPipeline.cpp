@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <sys/time.h>
+#include <thread>
 
 static std::string timestamp() {
     struct timeval tv;
@@ -79,11 +80,18 @@ struct NegotiationCtx {
     CameraPipeline*  pipeline;
 };
 
-static gboolean doCreateOffer(gpointer data) {
+gboolean CameraPipeline::doCreateOffer(gpointer data) {
     auto* ctx = static_cast<NegotiationCtx*>(data);
+    auto* self = ctx->pipeline;
+    self->offerSourceId_ = 0;
+    if (self->failed_.load() || !self->webrtcbin_) {
+        delete ctx;
+        return G_SOURCE_REMOVE;
+    }
+
     std::cout << "[" << timestamp() << "] Creating offer on main loop" << std::endl;
-    GstPromise* promise = gst_promise_new_with_change_func(CameraPipeline::onOfferCreated, ctx->pipeline, nullptr);
-    g_signal_emit_by_name(ctx->webrtcbin, "create-offer", nullptr, promise);
+    GstPromise* promise = gst_promise_new_with_change_func(CameraPipeline::onOfferCreated, self, nullptr);
+    g_signal_emit_by_name(self->webrtcbin_, "create-offer", nullptr, promise);
     delete ctx;
     return G_SOURCE_REMOVE;
 }
@@ -187,19 +195,32 @@ bool CameraPipeline::start() {
     std::cout << "[" << timestamp() << "] Pipeline state change: "
               << gst_element_state_change_return_get_name(ret) << std::endl;
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    if (failed_.load()) {
+        const std::string lastError = getLastError();
+        std::cerr << "[" << timestamp() << "] Pipeline failed during startup"
+                  << (lastError.empty() ? "" : ": " + lastError) << std::endl;
+        stop();
+        return false;
+    }
+
     // Fallback: explicitly schedule offer creation on the GLib main loop.
     // on-negotiation-needed may not fire reliably when set_state is called
     // from a non-main thread (e.g., the WebSocket thread).
     // offerScheduled_ prevents a double-offer if on-negotiation-needed also fires.
     bool expected = false;
     if (offerScheduled_.compare_exchange_strong(expected, true))
-        g_idle_add(doCreateOffer, new NegotiationCtx{webrtcbin_, this});
+        offerSourceId_ = g_idle_add(CameraPipeline::doCreateOffer, new NegotiationCtx{webrtcbin_, this});
 
     return true;
 }
 
 void CameraPipeline::stop() {
     offerScheduled_.store(false);
+    if (offerSourceId_) {
+        g_source_remove(offerSourceId_);
+        offerSourceId_ = 0;
+    }
     if (busWatchId_) {
         g_source_remove(busWatchId_);
         busWatchId_ = 0;
@@ -318,7 +339,7 @@ void CameraPipeline::onNegotiationNeeded(GstElement* webrtcbin, gpointer user_da
     std::cout << "[" << timestamp() << "] on-negotiation-needed fired" << std::endl;
     bool expected = false;
     if (self->offerScheduled_.compare_exchange_strong(expected, true))
-        g_idle_add(doCreateOffer, new NegotiationCtx{webrtcbin, self});
+        self->offerSourceId_ = g_idle_add(CameraPipeline::doCreateOffer, new NegotiationCtx{webrtcbin, self});
 }
 
 void CameraPipeline::onIceCandidate(GstElement*, guint mlineindex, gchar* candidate, gpointer user_data) {
@@ -329,6 +350,10 @@ void CameraPipeline::onIceCandidate(GstElement*, guint mlineindex, gchar* candid
 void CameraPipeline::onOfferCreated(GstPromise* promise, gpointer user_data) {
     std::cout << "[" << timestamp() << "] Offer created" << std::endl;
     auto* self = static_cast<CameraPipeline*>(user_data);
+    if (self->failed_.load() || !self->webrtcbin_) {
+        gst_promise_unref(promise);
+        return;
+    }
 
     const GstStructure* reply = gst_promise_get_reply(promise);
     GstWebRTCSessionDescription* offer = nullptr;

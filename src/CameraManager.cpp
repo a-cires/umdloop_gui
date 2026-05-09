@@ -134,6 +134,41 @@ static bool containsBusyError(const std::string& message) {
            message.find("resource busy") != std::string::npos;
 }
 
+static void validateConfigMode(const std::string& id,
+                               CameraConfig& cfg,
+                               const std::vector<CameraMode>& modes) {
+    if (modes.empty()) return;
+
+    auto exact = std::find_if(modes.begin(), modes.end(), [&](const CameraMode& mode) {
+        return mode.format == cfg.format &&
+               mode.width == cfg.width &&
+               mode.height == cfg.height;
+    });
+
+    if (exact == modes.end()) {
+        const CameraMode& fallback = modes.front();
+        std::cerr << "camera config mode unsupported for " << id
+                  << ": " << cfg.format << " " << cfg.width << "x" << cfg.height
+                  << " on " << cfg.devicePath
+                  << "; using " << fallback.format << " "
+                  << fallback.width << "x" << fallback.height
+                  << " instead" << std::endl;
+        cfg.format = fallback.format;
+        cfg.width = fallback.width;
+        cfg.height = fallback.height;
+        cfg.fps = std::min(cfg.fps > 0 ? cfg.fps : fallback.maxFps, fallback.maxFps);
+        return;
+    }
+
+    if (cfg.fps <= 0 || cfg.fps > exact->maxFps) {
+        int oldFps = cfg.fps;
+        cfg.fps = exact->maxFps;
+        std::cerr << "camera config fps adjusted for " << id
+                  << ": " << oldFps << " -> " << cfg.fps
+                  << " on " << cfg.devicePath << std::endl;
+    }
+}
+
 static void logConfigConflicts(const std::map<std::string, CameraConfig>& configs) {
     std::map<std::string, std::vector<std::string>> byLiveKey;
 
@@ -302,6 +337,7 @@ void CameraManager::discoverCameras() {
             }
             if (it->second.usbPath.empty() && !usbPath.empty())
                 it->second.usbPath = usbPath;
+            validateConfigMode(it->first, it->second, capabilities_[devicePath]);
         } else {
             std::string name = generateName();
             std::cout << "    -> registered as \"" << name << "\" path=" << devicePath << std::endl;
