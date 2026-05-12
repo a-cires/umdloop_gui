@@ -8,7 +8,7 @@
  * Requirements: 14.1, 14.2
  */
 
-import { useLocalTiles } from "../../config";
+import { isLocalTiles } from "../../config";
 
 /** MapTiler satellite tile URL (requires internet). */
 const MAPTILER_URL =
@@ -22,7 +22,7 @@ const LOCAL_TILE_URL = "/tiles/{z}/{x}/{y}.jpg";
  * @returns {{ type: string, tiles: string[], tileSize: number, maxzoom: number }}
  */
 export function getTileSource() {
-  const url = useLocalTiles() ? LOCAL_TILE_URL : MAPTILER_URL;
+  const url = isLocalTiles() ? LOCAL_TILE_URL : MAPTILER_URL;
 
   return {
     type: "raster",

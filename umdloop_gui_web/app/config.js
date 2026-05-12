@@ -27,7 +27,7 @@ export function getRosbridgeUrl() {
   return process.env.NEXT_PUBLIC_ROSBRIDGE_WS_URL || "ws://localhost:9090";
 }
 
-export function useLocalTiles() {
+export function isLocalTiles() {
   return process.env.NEXT_PUBLIC_USE_LOCAL_TILES === "true";
 }
 
