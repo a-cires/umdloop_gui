@@ -46,6 +46,7 @@ for i in 0 1 2; do
     --no-first-run \
     --disable-session-crashed-bubble \
     --disable-infobars \
+    --disable-features=WebRtcHideLocalIpsWithMdns \
     "${URLS[$i]}" &
 
   sleep "$LAUNCH_DELAY"
