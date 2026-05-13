@@ -68,7 +68,7 @@
   - Delete old `GUI functions/Navigation.js`
   - Update import in PageContent
 
-- [ ] 9. Decompose OperationsWall into feature modules
+- [x] 9. Decompose OperationsWall into feature modules
   - Create `features/operations-wall/OperationsWall.jsx` — slim orchestrator
   - Create `features/operations-wall/ArmMonitor.jsx`
   - Create `features/operations-wall/DriveMonitor.jsx`
