@@ -77,7 +77,7 @@
   - Delete old `GUI functions/OperationsWall.js`
   - Update imports in PageContent and OperatorTab
 
-- [ ] 10. Decompose TechnicianDashboard into feature modules
+- [x] 10. Decompose TechnicianDashboard into feature modules
   - Create `features/technician/TechnicianDashboard.jsx` — slim orchestrator
   - Create `features/technician/MissionClock.jsx`
   - Create `features/technician/PowerPanel.jsx`
@@ -87,7 +87,7 @@
   - Delete old `GUI functions/TechnicianDashboard.js`
   - Update import in PageContent
 
-- [ ] 11. Decompose ScienceMonitor into feature modules
+- [x] 11. Decompose ScienceMonitor into feature modules
   - Create `features/science/ScienceMonitor.jsx` — slim orchestrator (tab switch)
   - Create `features/science/Scientist1Tab1.jsx`
   - Create `features/science/Scientist1Tab2.jsx`

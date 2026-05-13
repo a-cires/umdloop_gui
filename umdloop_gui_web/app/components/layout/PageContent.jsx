@@ -5,8 +5,8 @@ import MapView from "../map/MapView";
 import OperationsWall from "../../features/operations-wall/OperationsWall";
 import OperatorTab from "../../features/operator/OperatorTab";
 import Navigation from "../../features/navigation/Navigation";
-import ScienceMonitor from "../../GUI functions/ScienceMonitor";
-import TechnicianDashboard from "../../GUI functions/TechnicianDashboard";
+import ScienceMonitor from "../../features/science/ScienceMonitor";
+import TechnicianDashboard from "../../features/technician/TechnicianDashboard";
 import SubsystemBar from "./SubsystemBar";
 import { NAVIGATION_BUTTONS } from "../../config";
 
