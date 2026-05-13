@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { useWebRTC } from "../hooks/WebRTCContext";
+import { useWebRTC } from "../context/WebRTCContext";
 
 const OVERLAY_STYLE = {
   position: "absolute",

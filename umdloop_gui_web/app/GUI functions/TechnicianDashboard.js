@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import ROSLIB from "roslib";
 import { TECHNICIAN_COMMAND_TOPICS, TECHNICIAN_TOPICS, getRosbridgeUrl } from "../config";
-import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../battery";
+import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../lib/battery";
 
 export default function TechnicianDashboard() {
   const [setHours, setSetHours] = useState("00");

@@ -5,7 +5,8 @@ import ROSLIB from "roslib";
 import MapView from "./MapView";
 import CameraFeed from "./CameraFeed";
 import { getApiBaseUrl, getRosbridgeUrl, CAMERA_ROLES } from "../config";
-import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../battery";
+import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../lib/battery";
+import { getRadioStatus, sendPathPlan } from "../lib/api";
 
 const CONTROL_MODES = ["Drive Command", "Arm Command", "Science Command", "Emergency Stop"];
 
@@ -65,7 +66,6 @@ export default function OperationsWall({ pane = "all", layout = "default" }) {
     ledState: "GREEN",
     sensorTemp: 41.2,
   });
-  const apiBaseUrl = getApiBaseUrl();
 
   const armFeeds = ARM_PRESETS[armPresetIdx].feeds;
   const driveFeeds = DRIVE_PRESETS[drivePresetIdx].feeds;
@@ -112,8 +112,7 @@ export default function OperationsWall({ pane = "all", layout = "default" }) {
 
     const loadRadioStatus = async () => {
       try {
-        const res = await fetch(`${apiBaseUrl}/radio/status`);
-        const data = await res.json();
+        const data = await getRadioStatus();
         if (cancelled) return;
 
         setSystemStats((prev) => ({
@@ -133,7 +132,7 @@ export default function OperationsWall({ pane = "all", layout = "default" }) {
       cancelled = true;
       clearInterval(id);
     };
-  }, [apiBaseUrl]);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -163,18 +162,13 @@ export default function OperationsWall({ pane = "all", layout = "default" }) {
   const submitGoal = async () => {
     try {
       setGoalStatus("Sending...");
-      const res = await fetch(`${apiBaseUrl}/navigation/path-plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          latitude: Number(goalLat),
-          longitude: Number(goalLon),
-          position_tolerance: 0.0,
-          mode: goalMode,
-        }),
+      const data = await sendPathPlan({
+        latitude: Number(goalLat),
+        longitude: Number(goalLon),
+        positionTolerance: 0.0,
+        mode: goalMode,
       });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) {
+      if (data.ok === false) {
         setGoalStatus(data.error || data.message || "Failed");
         return;
       }
@@ -272,7 +266,7 @@ export default function OperationsWall({ pane = "all", layout = "default" }) {
     <MonitorShell title="Drone OSD">
       <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
         <div style={{ position: "relative", flex: 1, minHeight: 160, borderRadius: 16, overflow: "hidden", border: "2px solid #3b3b3b", background: "#101010" }}>
-          <img src="http://127.0.0.1:5000/object-detection/stream/0" alt="Drone feed primary" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <img src={`${getApiBaseUrl()}/object-detection/stream/0`} alt="Drone feed primary" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           <div style={{ position: "absolute", top: 8, left: 8, fontSize: 12, fontWeight: 800, color: "#d8ffd8", background: "rgba(0,0,0,0.55)", borderRadius: 8, padding: "5px 8px" }}>
             SPD {odomSummary}
           </div>

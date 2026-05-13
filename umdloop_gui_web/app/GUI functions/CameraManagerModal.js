@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { useWebRTC } from "../hooks/WebRTCContext";
+import { useWebRTC } from "../context/WebRTCContext";
 import { CAMERA_ROLES } from "../config";
 import CameraFeed from "./CameraFeed";
 

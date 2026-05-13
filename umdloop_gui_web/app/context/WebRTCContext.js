@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext } from "react";
-import useWebRTCCameras from "./useWebRTCCameras";
+import useWebRTCCameras from "../hooks/useWebRTCCameras";
 
 const EMPTY = {
   connected: false,

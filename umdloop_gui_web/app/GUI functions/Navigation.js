@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { getObjectDetectionStatus, startObjectDetection, stopObjectDetection, sendPathPlan } from "../lib/api";
+import { getApiBaseUrl } from "../config";
 
 export default function Navigation({ selectedNavItem }) {
   const [running, setRunning] = useState(false);
@@ -16,8 +18,7 @@ export default function Navigation({ selectedNavItem }) {
   const fetchStatus = async () => {
     try {
       setError("");
-      const res = await fetch("http://127.0.0.1:5000/object-detection/status");
-      const data = await res.json();
+      const data = await getObjectDetectionStatus();
       setRunning(Boolean(data.running));
       setPid(data.pid ?? null);
     } catch (_) {
@@ -30,7 +31,7 @@ export default function Navigation({ selectedNavItem }) {
   const startDetection = async () => {
     try {
       setError("");
-      await fetch("http://127.0.0.1:5000/object-detection/start", { method: "POST" });
+      await startObjectDetection();
       await fetchStatus();
     } catch (_) {
       setError("Failed to start");
@@ -40,7 +41,7 @@ export default function Navigation({ selectedNavItem }) {
   const stopDetection = async () => {
     try {
       setError("");
-      await fetch("http://127.0.0.1:5000/object-detection/stop", { method: "POST" });
+      await stopObjectDetection();
       await fetchStatus();
     } catch (_) {
       setError("Failed to stop");
@@ -53,20 +54,14 @@ export default function Navigation({ selectedNavItem }) {
       setError("");
       setPathPlanStatus("Sending...");
 
-      const res = await fetch("http://127.0.0.1:5000/navigation/path-plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          position_tolerance: 0.0,
-          mode: navMode,
-        }),
+      const data = await sendPathPlan({
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+        positionTolerance: 0.0,
+        mode: navMode,
       });
 
-      const data = await res.json();
-
-      if (!res.ok || data.ok === false) {
+      if (data.ok === false) {
         setPathPlanStatus("");
         setError(data.error || data.message || "Path plan failed");
         return;
@@ -154,7 +149,7 @@ export default function Navigation({ selectedNavItem }) {
 
           <div style={{ textAlign: "center" }}>
             <h2>Object Detection Stream</h2>
-            <img src="http://127.0.0.1:5000/object-detection/stream/0" alt="Object Detection Stream" style={{ width: "640px", height: "480px" }} />
+            <img src={`${getApiBaseUrl()}/object-detection/stream/0`} alt="Object Detection Stream" style={{ width: "640px", height: "480px" }} />
           </div>
         </div>
       )}

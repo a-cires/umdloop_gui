@@ -5,7 +5,7 @@ import NavigationBar from "./GUI functions/NavigationBar";
 import PageContent from "./GUI functions/PageContent";
 import SubsystemBar from "./GUI functions/SubsystemBar";
 import { MODES, NAVIGATION_BUTTONS, SUBSYSTEMS, getWebRTCUrl } from "./config";
-import { WebRTCProvider } from "./hooks/WebRTCContext";
+import { WebRTCProvider } from "./context/WebRTCContext";
 
 export default function LoopGui() {
   console.log("🔥 LOOP GUI RENDERED");

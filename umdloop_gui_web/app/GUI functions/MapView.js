@@ -4,6 +4,7 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import { Map, Marker } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useLocalTiles } from "../config";
+import { getRoverPosition } from "../lib/api";
 
 export default function MapView({ selectedSubsystem, titleOverride }) {
   const [viewState, setViewState] = useState({
@@ -21,8 +22,7 @@ export default function MapView({ selectedSubsystem, titleOverride }) {
   useEffect(() => {
     const poll = async () => {
       try {
-        const res = await fetch("http://127.0.0.1:5000/navigation/rover-position");
-        const data = await res.json();
+        const data = await getRoverPosition();
         if (data.fix) {
           const pos = { latitude: data.latitude, longitude: data.longitude };
           setRoverPosition(pos);
