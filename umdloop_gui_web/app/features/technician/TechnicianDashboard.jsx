@@ -49,11 +49,10 @@ export default function TechnicianDashboard() {
     batteryPack: 35.1,
     avionics: 37.4,
   });
-  const [powerStats, setPowerStats] = useState({ batteryDrive: 94, batteryArm: 88 });
+  const [powerStats, setPowerStats] = useState({ batteryDrive: 94 });
   const [radioLevel, setRadioLevel] = useState(82);
   const [topicAvailability, setTopicAvailability] = useState({
     batteryDrive: false,
-    batteryArm: false,
     radio: false,
     temperatures: false,
     ledState: false,
@@ -383,23 +382,20 @@ export default function TechnicianDashboard() {
     2.5,
     Object.values(wheelDiag).reduce((sum, wheel) => sum + Math.abs(wheel.current), 0) + Object.values(steerDiag).reduce((sum, steer) => sum + Math.abs(steer.current), 0) * 0.35
   );
-  const armLoadCurrentA = laserWarningOn ? 7.5 : 4.0;
   const driveBattery = buildBatteryHealthSnapshot({ socPercent: powerStats.batteryDrive, loadCurrentA: driveLoadCurrentA, temperatureC: sensorTemps.batteryPack });
-  const armBattery = buildBatteryHealthSnapshot({ socPercent: powerStats.batteryArm, loadCurrentA: armLoadCurrentA, temperatureC: sensorTemps.armController });
 
   useEffect(() => {
     const id = setInterval(() => {
       const intervalHours = 1.2 / 3600;
-      if (!topicAvailability.batteryDrive || !topicAvailability.batteryArm) {
+      if (!topicAvailability.batteryDrive) {
         setPowerStats((prev) => ({
-          batteryDrive: topicAvailability.batteryDrive ? prev.batteryDrive : Math.max(0, prev.batteryDrive - ((driveLoadCurrentA * intervalHours) / TATTU_HV_6S_22000.capacityAh) * 100),
-          batteryArm: topicAvailability.batteryArm ? prev.batteryArm : Math.max(0, prev.batteryArm - ((armLoadCurrentA * intervalHours) / TATTU_HV_6S_22000.capacityAh) * 100),
+          batteryDrive: Math.max(0, prev.batteryDrive - ((driveLoadCurrentA * intervalHours) / TATTU_HV_6S_22000.capacityAh) * 100),
         }));
       }
       if (!topicAvailability.temperatures) {
         setSensorTemps((prev) => ({
           driveController: Math.max(20, Math.min(95, prev.driveController + (driveLoadCurrentA > 20 ? 0.22 : -0.08) + (Math.random() * 0.35 - 0.18))),
-          armController: Math.max(20, Math.min(95, prev.armController + (laserWarningOn ? 0.1 : -0.03) + (Math.random() * 0.25 - 0.12))),
+          armController: Math.max(20, Math.min(95, prev.armController + (Math.random() * 0.25 - 0.12))),
           batteryPack: Math.max(20, Math.min(95, prev.batteryPack + (driveLoadCurrentA > 28 ? 0.16 : -0.04) + (Math.random() * 0.22 - 0.11))),
           avionics: Math.max(20, Math.min(95, prev.avionics + (Math.random() * 0.28 - 0.14))),
         }));
@@ -409,7 +405,7 @@ export default function TechnicianDashboard() {
       }
     }, 1200);
     return () => clearInterval(id);
-  }, [armLoadCurrentA, driveLoadCurrentA, laserWarningOn, topicAvailability]);
+  }, [driveLoadCurrentA, topicAvailability]);
 
   const hours = String(Math.floor(remainingSeconds / 3600)).padStart(2, "0");
   const minutes = String(Math.floor((remainingSeconds % 3600) / 60)).padStart(2, "0");
@@ -473,7 +469,7 @@ export default function TechnicianDashboard() {
   ];
   const systemChecks = [
     { name: "ROS Link", ok: rosStatus === "connected" },
-    { name: "Power Bus", ok: driveBattery.packVoltageV > 22.2 && armBattery.packVoltageV > 22.2 },
+    { name: "Power Bus", ok: driveBattery.packVoltageV > 22.2 },
     { name: "Thermal", ok: Object.values(sensorTemps).every((t) => t < 75) },
     { name: "Mobility Motors", ok: Object.values(motorEnabled).some(Boolean) },
     { name: "Diagnostics", ok: !topicAvailability.diagnostics || (diagnosticsSummary.error === 0 && diagnosticsSummary.stale === 0) },
@@ -503,7 +499,6 @@ export default function TechnicianDashboard() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "10px", alignItems: "stretch" }}>
         <PowerPanel
           driveBattery={driveBattery}
-          armBattery={armBattery}
           sensorTemps={sensorTemps}
         />
 
