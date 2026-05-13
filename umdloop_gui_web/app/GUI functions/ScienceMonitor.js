@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import RamanPlot from "../../spectrometer/RamanPlot";
 import CameraFeed from "./CameraFeed";
 import CameraManagerModal from "./CameraManagerModal";
-import { CAMERA_ROLES, SCIENCE_SUBSYSTEMS } from "./pageConstants";
+import { CAMERA_ROLES, SCIENCE_SUBSYSTEMS } from "../config";
 import SubsystemBar from "./SubsystemBar";
 
 const RAMAN_WS_URL = "ws://localhost:5001/ws/spectrum";

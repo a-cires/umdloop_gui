@@ -8,7 +8,7 @@ import Navigation from "./Navigation";
 import ScienceMonitor from "./ScienceMonitor";
 import TechnicianDashboard from "./TechnicianDashboard";
 import SubsystemBar from "./SubsystemBar";
-import { NAVIGATION_BUTTONS } from "./pageConstants";
+import { NAVIGATION_BUTTONS } from "../config";
 
 export default function PageContent({
   selectedMode,

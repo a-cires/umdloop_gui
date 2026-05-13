@@ -5,7 +5,7 @@ import RamanPlot from "../../spectrometer/RamanPlot";
 import CameraFeed from "./CameraFeed";
 import CameraManagerModal from "./CameraManagerModal";
 import MissionPanel from "./MissionPanel";
-import { CAMERA_ROLES } from "./pageConstants";
+import { CAMERA_ROLES } from "../config";
 
 const RAMAN_WS_URL = "ws://localhost:5001/ws/spectrum";
 const CAMERA_ROTATIONS_STORAGE_KEY = "umdloop.cameraRotations";

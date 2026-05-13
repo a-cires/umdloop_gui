@@ -4,9 +4,8 @@ import React, { useState } from "react";
 import NavigationBar from "./GUI functions/NavigationBar";
 import PageContent from "./GUI functions/PageContent";
 import SubsystemBar from "./GUI functions/SubsystemBar";
-import { MODES, NAVIGATION_BUTTONS, SUBSYSTEMS } from "./GUI functions/pageConstants";
+import { MODES, NAVIGATION_BUTTONS, SUBSYSTEMS, getWebRTCUrl } from "./config";
 import { WebRTCProvider } from "./hooks/WebRTCContext";
-import { getWebRTCUrl } from "./config";
 
 export default function LoopGui() {
   console.log("🔥 LOOP GUI RENDERED");

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { NAV_MODE_ICONS, NAV_MODES } from "./pageConstants";
+import { NAV_MODE_ICONS, NAV_MODES } from "../config";
 
 export default function NavigationBar({ selectedMode, setSelectedMode }) {
   const [hoveredButtonId, setHoveredButtonId] = useState(null);

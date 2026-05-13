@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useWebRTC } from "../hooks/WebRTCContext";
-import { CAMERA_ROLES } from "./pageConstants";
+import { CAMERA_ROLES } from "../config";
 import CameraFeed from "./CameraFeed";
 
 const ROLE_OPTIONS = [

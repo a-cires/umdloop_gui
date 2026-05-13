@@ -4,9 +4,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import ROSLIB from "roslib";
 import MapView from "./MapView";
 import CameraFeed from "./CameraFeed";
-import { getApiBaseUrl, getRosbridgeUrl } from "../config";
+import { getApiBaseUrl, getRosbridgeUrl, CAMERA_ROLES } from "../config";
 import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../battery";
-import { CAMERA_ROLES } from "./pageConstants";
 
 const CONTROL_MODES = ["Drive Command", "Arm Command", "Science Command", "Emergency Stop"];
 

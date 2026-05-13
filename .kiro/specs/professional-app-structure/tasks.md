@@ -7,7 +7,7 @@
   - Create `styles/theme.css` with CSS custom properties extracted from repeated inline color/spacing values
   - Import `theme.css` in `globals.css`
 
-- [ ] 2. Create centralized config modules
+- [x] 2. Create centralized config modules
   - Create `config/environment.js` — move `getRosbridgeUrl`, `getApiBaseUrl`, `getWebRTCUrl`, `useLocalTiles` from `config.js`
   - Create `config/ros-topics.js` — move `GUI_REQUIRED_TOPICS`, `TECHNICIAN_TOPICS`, `TECHNICIAN_COMMAND_TOPICS` from `config.js`
   - Create `config/constants.js` — move all exports from `GUI functions/pageConstants.js` (MODES, SUBSYSTEMS, CAMERA_ROLES, etc.)
