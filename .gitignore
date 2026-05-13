@@ -47,4 +47,3 @@ umdloop_gui_web/.vercel
 # typescript
 umdloop_gui_web/*.tsbuildinfo
 umdloop_gui_web/next-env.d.ts
-.kiro
