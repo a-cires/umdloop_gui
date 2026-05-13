@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import FullscreenCameraOverlay from "../../components/camera/FullscreenCameraOverlay";
 import CameraManagerModal from "../../components/camera/CameraManagerModal";
 import DriveView from "./DriveView";
+import DriveAutonavView from "./DriveAutonavView";
 import ArmView from "./ArmView";
 import ScienceView from "./ScienceView";
 import DriveScienceView from "./DriveScienceView";
@@ -81,6 +82,8 @@ export default function OperatorTab({ selectedSubsystem, setSelectedSubsystem })
 
   if (selectedSubsystem === "Drive (Science)") {
     content = <DriveScienceView />;
+  } else if (selectedSubsystem === "Drive (Autonav)") {
+    content = <DriveAutonavView {...sharedProps} />;
   } else if (selectedSubsystem === "Drive (Default)" || selectedSubsystem === "Drive") {
     content = <DriveView {...sharedProps} />;
   } else if (selectedSubsystem === "Arm") {

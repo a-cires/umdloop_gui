@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import ROSLIB from "roslib";
-import { TECHNICIAN_COMMAND_TOPICS, TECHNICIAN_TOPICS, getRosbridgeUrl } from "../../config";
+import { TECHNICIAN_COMMAND_TOPICS, TECHNICIAN_TOPICS, getRosbridgeUrl, getApiBaseUrl } from "../../config";
 import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../../lib/battery";
 import MissionClock from "./MissionClock";
 import PowerPanel from "./PowerPanel";
@@ -50,7 +50,8 @@ export default function TechnicianDashboard() {
     avionics: 37.4,
   });
   const [powerStats, setPowerStats] = useState({ batteryDrive: 94 });
-  const [radioLevel, setRadioLevel] = useState(82);
+  const [radioLevel, setRadioLevel] = useState(0);
+  const [radioStatus, setRadioStatus] = useState("polling...");
   const [topicAvailability, setTopicAvailability] = useState({
     batteryDrive: false,
     radio: false,
@@ -344,6 +345,28 @@ export default function TechnicianDashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    const poll = () => {
+      fetch(`${getApiBaseUrl()}/radio/status`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok && data.connected) {
+            setRadioLevel(data.quality_percent);
+            setRadioStatus(`RSSI ${data.rssi_dbm ?? "?"} dBm | ${data.source}`);
+          } else {
+            setRadioLevel(0);
+            setRadioStatus(data.error || "disconnected");
+          }
+        })
+        .catch(() => {
+          setRadioStatus("API unreachable");
+        });
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
+  }, []);
+
   const publishTechnicianCommand = (topicConfig, payload) => {
     if (!rosRef.current) throw new Error("ROS is not connected");
     const topic = new ROSLIB.Topic({
@@ -504,6 +527,7 @@ export default function TechnicianDashboard() {
           ledState={ledState}
           setLedState={setLedState}
           radioLevel={radioLevel}
+          radioStatus={radioStatus}
           bytesPerSecond={bytesPerSecond}
           freshTelemetryCount={freshTelemetryCount}
           telemetryTopicStates={telemetryTopicStates}
@@ -515,7 +539,6 @@ export default function TechnicianDashboard() {
           motionStats={motionStats}
           estimatedTurnRadiusM={estimatedTurnRadiusM}
           displayedDiagnosticsSummary={displayedDiagnosticsSummary}
-          diagnosticsTelemetryFresh={diagnosticsTelemetryFresh}
           topicAvailability={topicAvailability}
           laserWarningOn={laserWarningOn}
           setLaserWarningOn={setLaserWarningOn}
