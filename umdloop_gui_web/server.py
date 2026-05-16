@@ -15,6 +15,7 @@ from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from ultralytics import YOLO
 from ros_bridge import ros_context
+from led_controller import controller as led_controller
 
 
 app = Flask(__name__)
@@ -365,6 +366,35 @@ def rover_position():
     if pos is None:
         return jsonify({"ok": True, "fix": False}), 200
     return jsonify({"ok": True, "fix": True, "latitude": pos["latitude"], "longitude": pos["longitude"]}), 200
+
+
+@app.get("/led/status")
+def led_status():
+    return jsonify({"ok": True, **led_controller.status()}), 200
+
+
+@app.post("/led/command")
+def led_command():
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "SOLID")
+    r = data.get("r", 0)
+    g = data.get("g", 0)
+    b = data.get("b", 0)
+    rate_hz = data.get("rate_hz", data.get("hz", 0))
+
+    ok, error = led_controller.send(mode, r=r, g=g, b=b, rate_hz=rate_hz)
+    if not ok:
+        return jsonify({"ok": False, "error": error, **led_controller.status()}), 503
+
+    return jsonify({"ok": True, **led_controller.status()}), 200
+
+
+@app.post("/led/off")
+def led_off():
+    ok, error = led_controller.send("OFF")
+    if not ok:
+        return jsonify({"ok": False, "error": error, **led_controller.status()}), 503
+    return jsonify({"ok": True, **led_controller.status()}), 200
 
 
 @app.post("/navigation/path-plan")

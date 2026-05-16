@@ -5,8 +5,7 @@ import { TECHNICIAN_TOPICS } from "../../config";
 
 export default function CommsPanel({
   rosStatus,
-  ledState,
-  setLedState,
+  led,
   radioLevel,
   radioStatus,
   bytesPerSecond,
@@ -26,12 +25,23 @@ export default function CommsPanel({
   wheelFault,
   systemChecks,
 }) {
+  const ledLabel = led
+    ? `${led.preset} / ${led.mode}${led.mode === "FLASH" || led.mode === "PULSE" ? ` @ ${led.rateHz.toFixed(1)} Hz` : ""}`
+    : "—";
+  const ledLink = led
+    ? led.hardware.connected
+      ? `LINK OK${led.hardware.port ? ` (${led.hardware.port})` : ""}`
+      : `LINK DOWN${led.hardware.error ? ` — ${led.hardware.error}` : ""}`
+    : "Not initialized";
+  const ledLinkColor = led && led.hardware.connected ? "#9df79d" : "#ff8080";
+
   return (
     <>
       <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "16px", minHeight: "220px" }}>
         <div style={{ fontSize: "26px", color: "#ffffff", marginBottom: "12px", fontWeight: 900, letterSpacing: "0.5px" }}>Comms / Link Health</div>
         <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>ROS Link: <b>{rosStatus}</b></div>
-        <div style={{ fontSize: "18px", color: "#bdbdbd", marginBottom: "8px" }}>LED Status: <b>{ledState}</b></div>
+        <div style={{ fontSize: "18px", color: "#bdbdbd", marginBottom: "4px" }}>LED Status: <b>{ledLabel}</b></div>
+        <div style={{ fontSize: "16px", color: ledLinkColor, marginBottom: "8px", fontWeight: 700 }}>USB LED: {ledLink}</div>
         <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Radio Connectivity: <b>{radioLevel.toFixed(0)}%</b></div>
         <div style={{ fontSize: "18px", color: "#bdbdbd", marginBottom: "8px" }}>Radio Status: <b>{radioStatus}</b></div>
         <div style={{ fontSize: "20px", color: "#d8d8d8", marginBottom: "8px" }}>Info Rate: <b>{bytesPerSecond.toFixed(0)} B/s</b></div>

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import ROSLIB from "roslib";
 import { TECHNICIAN_COMMAND_TOPICS, TECHNICIAN_TOPICS, getRosbridgeUrl, getApiBaseUrl } from "../../config";
 import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../../lib/battery";
+import { useLedController } from "../../hooks/useLedController";
 import MissionClock from "./MissionClock";
 import PowerPanel from "./PowerPanel";
 import CommsPanel from "./CommsPanel";
@@ -31,7 +32,7 @@ export default function TechnicianDashboard({ missionId }) {
   const [remainingSeconds, setRemainingSeconds] = useState(defaultSeconds);
   const [timerRunning, setTimerRunning] = useState(false);
   const [extensionState, setExtensionState] = useState("none");
-  const [ledState, setLedState] = useState("GREEN");
+  const led = useLedController({ initialPreset: "GREEN", initialMode: "SOLID", initialRateHz: 2.0 });
   const [laserWarningOn, setLaserWarningOn] = useState(false);
 
   const [rosStatus, setRosStatus] = useState("connecting...");
@@ -534,8 +535,7 @@ export default function TechnicianDashboard({ missionId }) {
 
         <CommsPanel
           rosStatus={rosStatus}
-          ledState={ledState}
-          setLedState={setLedState}
+          led={led}
           radioLevel={radioLevel}
           radioStatus={radioStatus}
           bytesPerSecond={bytesPerSecond}
@@ -580,8 +580,7 @@ export default function TechnicianDashboard({ missionId }) {
         topicAvailability={topicAvailability}
         displayedDiagnosticsSummary={displayedDiagnosticsSummary}
         displayedDiagnosticItems={displayedDiagnosticItems}
-        ledState={ledState}
-        setLedState={setLedState}
+        led={led}
         laserWarningOn={laserWarningOn}
         setLaserWarningOn={setLaserWarningOn}
         wheelFault={wheelFault}

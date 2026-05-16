@@ -49,3 +49,22 @@ export async function sendRosCommand(command) {
   });
   return res.json();
 }
+
+export async function getLedStatus() {
+  const res = await fetch(`${base()}/led/status`);
+  return res.json();
+}
+
+export async function sendLedCommand({ mode, r = 0, g = 0, b = 0, rateHz = 0 }) {
+  const res = await fetch(`${base()}/led/command`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode, r, g, b, rate_hz: rateHz }),
+  });
+  return res.json();
+}
+
+export async function ledOff() {
+  const res = await fetch(`${base()}/led/off`, { method: "POST" });
+  return res.json();
+}
