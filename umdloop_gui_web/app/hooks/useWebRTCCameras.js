@@ -115,7 +115,6 @@ export default function useWebRTCCameras(url) {
   }, []);
 
   const startWhep = useCallback(async (id) => {
-    console.log("[whep] startWhep called", id, "alreadyHas=", pcsRef.current.has(id));
     if (pcsRef.current.has(id)) return;
 
     const pc = new RTCPeerConnection({ iceServers: [] });
@@ -224,7 +223,6 @@ export default function useWebRTCCameras(url) {
 
   useEffect(() => {
     const enabledIds = new Set(cameras.filter((c) => c.enabled).map((c) => c.id));
-    console.log("[whep] cameras updated. enabledIds=", [...enabledIds], "currentPcs=", [...pcsRef.current.keys()]);
     for (const id of enabledIds) {
       if (!pcsRef.current.has(id)) startWhep(id);
     }
