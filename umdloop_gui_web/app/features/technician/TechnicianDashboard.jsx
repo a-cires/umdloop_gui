@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import ROSLIB from "roslib";
-import { TECHNICIAN_COMMAND_TOPICS, TECHNICIAN_TOPICS, getRosbridgeUrl } from "../../config";
+import { TECHNICIAN_COMMAND_TOPICS, TECHNICIAN_TOPICS, getRosbridgeUrl, getApiBaseUrl } from "../../config";
 import { TATTU_HV_6S_22000, buildBatteryHealthSnapshot } from "../../lib/battery";
 import MissionClock from "./MissionClock";
 import PowerPanel from "./PowerPanel";
@@ -10,16 +10,30 @@ import CommsPanel from "./CommsPanel";
 import MobilityPanel from "./MobilityPanel";
 import DiagnosticsPanel from "./DiagnosticsPanel";
 
-export default function TechnicianDashboard() {
-  const [inputHours, setInputHours] = useState("00");
-  const [inputMinutes, setInputMinutes] = useState("10");
-  const [inputSeconds, setInputSeconds] = useState("00");
-  const [configuredSeconds, setConfiguredSeconds] = useState(600);
-  const [remainingSeconds, setRemainingSeconds] = useState(600);
+function getDefaultTimerSeconds(missionId) {
+  switch (missionId) {
+    case "delivery":
+      return 35 * 60; // 35 min
+    case "equipment-servicing":
+      return 40 * 60; // 40 min
+    case "science":
+      return 35 * 60; // 35 min
+    case "autonomous-navigation":
+      return 40 * 60; // 40 min
+    default:
+      return 10 * 60; // fallback 10 min
+  }
+}
+
+export default function TechnicianDashboard({ missionId }) {
+  const defaultSeconds = getDefaultTimerSeconds(missionId);
+  const [configuredSeconds, setConfiguredSeconds] = useState(defaultSeconds);
+  const [remainingSeconds, setRemainingSeconds] = useState(defaultSeconds);
   const [timerRunning, setTimerRunning] = useState(false);
+  const [extensionState, setExtensionState] = useState("none");
   const [ledState, setLedState] = useState("GREEN");
   const [laserWarningOn, setLaserWarningOn] = useState(false);
-  const [showCanPopup, setShowCanPopup] = useState(false);
+
   const [rosStatus, setRosStatus] = useState("connecting...");
   const [bytesPerSecond, setBytesPerSecond] = useState(0);
   const [roverVelocityMps, setRoverVelocityMps] = useState(0);
@@ -49,11 +63,11 @@ export default function TechnicianDashboard() {
     batteryPack: 35.1,
     avionics: 37.4,
   });
-  const [powerStats, setPowerStats] = useState({ batteryDrive: 94, batteryArm: 88 });
-  const [radioLevel, setRadioLevel] = useState(82);
+  const [powerStats, setPowerStats] = useState({ batteryDrive: 94 });
+  const [radioLevel, setRadioLevel] = useState(0);
+  const [radioStatus, setRadioStatus] = useState("polling...");
   const [topicAvailability, setTopicAvailability] = useState({
     batteryDrive: false,
-    batteryArm: false,
     radio: false,
     temperatures: false,
     ledState: false,
@@ -109,14 +123,6 @@ export default function TechnicianDashboard() {
   }, [timerRunning]);
 
   useEffect(() => {
-    const handleKey = (e) => {
-      if (e.key === "Escape") setShowCanPopup(false);
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, []);
-
-  useEffect(() => {
     const ros = new ROSLIB.Ros({ url: getRosbridgeUrl() });
     rosRef.current = ros;
     let byteCounter = 0;
@@ -134,9 +140,9 @@ export default function TechnicianDashboard() {
       return Number.isFinite(numeric) ? numeric : null;
     };
 
-    ros.on("connection", () => setRosStatus("connected"));
-    ros.on("error", () => setRosStatus("error"));
-    ros.on("close", () => setRosStatus("disconnected"));
+    ros.on("connection", () => { console.log("[TechDash] ROS connected"); setRosStatus("connected"); });
+    ros.on("error", (e) => { console.log("[TechDash] ROS error", e); setRosStatus("error"); });
+    ros.on("close", () => { console.log("[TechDash] ROS closed"); setRosStatus("disconnected"); });
 
     const countBytes = (msg) => {
       try {
@@ -225,33 +231,35 @@ export default function TechnicianDashboard() {
     jointStateTopic.subscribe((msg) => {
       countBytes(msg);
       markHeartbeat("jointStates");
+      console.log("[TechDash] joint_states received, names:", msg?.name);
       const names = msg?.name || [];
       const positions = msg?.position || [];
       const velocities = msg?.velocity || [];
       const efforts = msg?.effort || [];
       const idxByPatterns = (patterns) => names.findIndex((n) => patterns.some((p) => n.toLowerCase().includes(p)));
+      const safeNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
       const wheelPatterns = {
-        fl: ["front_left_wheel", "wheel_fl", "fl_wheel", "left_front_wheel"],
-        fr: ["front_right_wheel", "wheel_fr", "fr_wheel", "right_front_wheel"],
-        rl: ["rear_left_wheel", "wheel_rl", "rl_wheel", "left_rear_wheel"],
-        rr: ["rear_right_wheel", "wheel_rr", "rr_wheel", "right_rear_wheel"],
+        fl: ["propulsion_fl", "front_left_wheel", "wheel_fl", "fl_wheel", "left_front_wheel"],
+        fr: ["propulsion_fr", "front_right_wheel", "wheel_fr", "fr_wheel", "right_front_wheel"],
+        rl: ["propulsion_bl", "rear_left_wheel", "wheel_rl", "rl_wheel", "left_rear_wheel", "propulsion_rl"],
+        rr: ["propulsion_br", "rear_right_wheel", "wheel_rr", "rr_wheel", "right_rear_wheel", "propulsion_rr"],
       };
       const steerPatterns = {
-        fl: ["front_left_steer", "steer_fl", "fl_steer", "left_front_steer"],
-        fr: ["front_right_steer", "steer_fr", "fr_steer", "right_front_steer"],
-        rl: ["rear_left_steer", "steer_rl", "rl_steer", "left_rear_steer"],
-        rr: ["rear_right_steer", "steer_rr", "rr_steer", "right_rear_steer"],
+        fl: ["steer_fl", "front_left_steer", "fl_steer", "left_front_steer"],
+        fr: ["steer_fr", "front_right_steer", "fr_steer", "right_front_steer"],
+        rl: ["steer_bl", "rear_left_steer", "steer_rl", "rl_steer", "left_rear_steer"],
+        rr: ["steer_br", "rear_right_steer", "steer_rr", "rr_steer", "right_rear_steer"],
       };
       const nextWheel = { fl: { velocity: 0, current: 0 }, fr: { velocity: 0, current: 0 }, rl: { velocity: 0, current: 0 }, rr: { velocity: 0, current: 0 } };
       Object.keys(wheelPatterns).forEach((key) => {
         const idx = idxByPatterns(wheelPatterns[key]);
-        if (idx >= 0) nextWheel[key] = { velocity: Number(velocities[idx] || 0), current: Number(efforts[idx] || 0) };
+        if (idx >= 0) nextWheel[key] = { velocity: safeNum(velocities[idx]), current: safeNum(efforts[idx]) };
       });
       setWheelDiag(nextWheel);
       const nextSteer = { fl: { orientationDeg: 0, current: 0 }, fr: { orientationDeg: 0, current: 0 }, rl: { orientationDeg: 0, current: 0 }, rr: { orientationDeg: 0, current: 0 } };
       Object.keys(steerPatterns).forEach((key) => {
         const idx = idxByPatterns(steerPatterns[key]);
-        if (idx >= 0) nextSteer[key] = { orientationDeg: Number((positions[idx] || 0) * (180 / Math.PI)), current: Number(efforts[idx] || 0) };
+        if (idx >= 0) nextSteer[key] = { orientationDeg: safeNum(positions[idx]) * (180 / Math.PI), current: safeNum(efforts[idx]) };
       });
       setSteerDiag(nextSteer);
     });
@@ -308,6 +316,25 @@ export default function TechnicianDashboard() {
       markTopicAvailable("diagnostics");
     });
 
+    const motorStatusTopic = new ROSLIB.Topic({
+      ros,
+      name: TECHNICIAN_TOPICS.motorStatus.name,
+      messageType: TECHNICIAN_TOPICS.motorStatus.messageType,
+    });
+    motorStatusTopic.subscribe((msg) => {
+      countBytes(msg);
+      const joints = Array.isArray(msg?.joints) ? msg.joints : [];
+      setWheelDiag((prev) => {
+        const next = { ...prev };
+        const wheelMap = { propulsion_fl: "fl", propulsion_fr: "fr", propulsion_bl: "rl", propulsion_br: "rr" };
+        joints.forEach((j) => {
+          const key = Object.keys(wheelMap).find((p) => j.joint_name?.includes(p));
+          if (key) next[wheelMap[key]] = { ...next[wheelMap[key]], current: Number.isFinite(j.torque_current) ? j.torque_current : 0 };
+        });
+        return next;
+      });
+    });
+
     const bytesInterval = setInterval(() => {
       setBytesPerSecond(byteCounter);
       byteCounter = 0;
@@ -320,6 +347,7 @@ export default function TechnicianDashboard() {
       jointStateTopic.unsubscribe();
       headingTopic.unsubscribe();
       diagnosticsTopic.unsubscribe();
+      motorStatusTopic.unsubscribe();
       if (hardStopBurstRef.current) {
         clearInterval(hardStopBurstRef.current);
         hardStopBurstRef.current = null;
@@ -329,6 +357,28 @@ export default function TechnicianDashboard() {
       }
       ros.close();
     };
+  }, []);
+
+  useEffect(() => {
+    const poll = () => {
+      fetch(`${getApiBaseUrl()}/radio/status`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.ok && data.connected) {
+            setRadioLevel(data.quality_percent);
+            setRadioStatus(`RSSI ${data.rssi_dbm ?? "?"} dBm | ${data.source}`);
+          } else {
+            setRadioLevel(0);
+            setRadioStatus(data.error || "disconnected");
+          }
+        })
+        .catch(() => {
+          setRadioStatus("API unreachable");
+        });
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
   }, []);
 
   const publishTechnicianCommand = (topicConfig, payload) => {
@@ -383,47 +433,25 @@ export default function TechnicianDashboard() {
     2.5,
     Object.values(wheelDiag).reduce((sum, wheel) => sum + Math.abs(wheel.current), 0) + Object.values(steerDiag).reduce((sum, steer) => sum + Math.abs(steer.current), 0) * 0.35
   );
-  const armLoadCurrentA = laserWarningOn ? 7.5 : 4.0;
   const driveBattery = buildBatteryHealthSnapshot({ socPercent: powerStats.batteryDrive, loadCurrentA: driveLoadCurrentA, temperatureC: sensorTemps.batteryPack });
-  const armBattery = buildBatteryHealthSnapshot({ socPercent: powerStats.batteryArm, loadCurrentA: armLoadCurrentA, temperatureC: sensorTemps.armController });
 
   useEffect(() => {
     const id = setInterval(() => {
-      const intervalHours = 1.2 / 3600;
-      if (!topicAvailability.batteryDrive || !topicAvailability.batteryArm) {
-        setPowerStats((prev) => ({
-          batteryDrive: topicAvailability.batteryDrive ? prev.batteryDrive : Math.max(0, prev.batteryDrive - ((driveLoadCurrentA * intervalHours) / TATTU_HV_6S_22000.capacityAh) * 100),
-          batteryArm: topicAvailability.batteryArm ? prev.batteryArm : Math.max(0, prev.batteryArm - ((armLoadCurrentA * intervalHours) / TATTU_HV_6S_22000.capacityAh) * 100),
-        }));
-      }
       if (!topicAvailability.temperatures) {
         setSensorTemps((prev) => ({
           driveController: Math.max(20, Math.min(95, prev.driveController + (driveLoadCurrentA > 20 ? 0.22 : -0.08) + (Math.random() * 0.35 - 0.18))),
-          armController: Math.max(20, Math.min(95, prev.armController + (laserWarningOn ? 0.1 : -0.03) + (Math.random() * 0.25 - 0.12))),
+          armController: Math.max(20, Math.min(95, prev.armController + (Math.random() * 0.25 - 0.12))),
           batteryPack: Math.max(20, Math.min(95, prev.batteryPack + (driveLoadCurrentA > 28 ? 0.16 : -0.04) + (Math.random() * 0.22 - 0.11))),
           avionics: Math.max(20, Math.min(95, prev.avionics + (Math.random() * 0.28 - 0.14))),
         }));
       }
-      if (!topicAvailability.radio) {
-        setRadioLevel((prev) => Math.max(0, Math.min(100, prev + (Math.random() * 2.5 - 1.25))));
-      }
     }, 1200);
     return () => clearInterval(id);
-  }, [armLoadCurrentA, driveLoadCurrentA, laserWarningOn, topicAvailability]);
+  }, [driveLoadCurrentA, topicAvailability]);
 
   const hours = String(Math.floor(remainingSeconds / 3600)).padStart(2, "0");
   const minutes = String(Math.floor((remainingSeconds % 3600) / 60)).padStart(2, "0");
   const seconds = String(remainingSeconds % 60).padStart(2, "0");
-
-  const applyTimer = () => {
-    const h = Math.max(0, parseInt(inputHours, 10) || 0);
-    const m = Math.max(0, parseInt(inputMinutes, 10) || 0);
-    const s = Math.max(0, parseInt(inputSeconds, 10) || 0);
-    const total = h * 3600 + m * 60 + s;
-    setConfiguredSeconds(total);
-    setRemainingSeconds(total);
-    setTimerRunning(false);
-  };
 
   const telemetryTopicStates = [
     { label: "Odom", key: "localizationOdom", topic: TECHNICIAN_TOPICS.localizationOdom.name },
@@ -439,14 +467,14 @@ export default function TechnicianDashboard() {
   const imuTelemetryFresh = topicHeartbeat.filteredImu && Date.now() - topicHeartbeat.filteredImu <= 2500;
   const headingTelemetryFresh = topicHeartbeat.heading && Date.now() - topicHeartbeat.heading <= 2500;
   const diagnosticsTelemetryFresh = topicHeartbeat.diagnostics && Date.now() - topicHeartbeat.diagnostics <= 2500;
-  const displayedWheelDiag = staleTelemetry || !jointTelemetryFresh ? { fl: { velocity: 0, current: 0 }, fr: { velocity: 0, current: 0 }, rl: { velocity: 0, current: 0 }, rr: { velocity: 0, current: 0 } } : wheelDiag;
-  const displayedSteerDiag = staleTelemetry || !jointTelemetryFresh ? { fl: { orientationDeg: 0, current: 0 }, fr: { orientationDeg: 0, current: 0 }, rl: { orientationDeg: 0, current: 0 }, rr: { orientationDeg: 0, current: 0 } } : steerDiag;
-  const displayedVelocityMps = staleTelemetry || !odomTelemetryFresh ? 0 : roverVelocityMps;
-  const displayedHeadingDeg = staleTelemetry || !headingTelemetryFresh ? null : headingDeg;
-  const displayedTilt = staleTelemetry || !imuTelemetryFresh ? { rollDeg: 0, pitchDeg: 0, magnitudeDeg: 0, vectorLabel: "CENTERED" } : tilt;
-  const displayedImuDynamics = staleTelemetry || !imuTelemetryFresh ? { yawRateDegs: 0, accelMagnitude: 0, accelState: "STEADY" } : imuDynamics;
-  const displayedDiagnosticsSummary = staleTelemetry || !diagnosticsTelemetryFresh ? { ok: 0, warn: 0, error: 0, stale: 0, topIssue: `Waiting for ${TECHNICIAN_TOPICS.diagnostics.name}` } : diagnosticsSummary;
-  const displayedDiagnosticItems = staleTelemetry || !diagnosticsTelemetryFresh ? [] : diagnosticItems;
+  const displayedWheelDiag = wheelDiag;
+  const displayedSteerDiag = steerDiag;
+  const displayedVelocityMps = roverVelocityMps;
+  const displayedHeadingDeg = headingDeg;
+  const displayedTilt = tilt;
+  const displayedImuDynamics = imuDynamics;
+  const displayedDiagnosticsSummary = diagnosticsSummary;
+  const displayedDiagnosticItems = diagnosticItems;
   const tiltWarning = displayedTilt.magnitudeDeg > 12;
   const safetyPercent = Math.max(0, Math.min(100, (displayedTilt.magnitudeDeg / 15) * 100));
   const headingLabel = displayedHeadingDeg == null ? "UNKNOWN" : ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round((((displayedHeadingDeg % 360) + 360) % 360) / 45) % 8];
@@ -464,16 +492,9 @@ export default function TechnicianDashboard() {
     if (worst == null || item.ageMs > worst.ageMs) return item;
     return worst;
   }, null);
-  const canConnections = [
-    { name: "CAN0 Main Bus", percent: rosStatus === "connected" ? 97 : rosStatus === "connecting..." ? 52 : 8, detail: rosStatus === "connected" ? "Heartbeat active" : "ROS bridge not fully established" },
-    { name: "CAN1 Arm Bus", percent: Math.max(0, Math.min(100, Math.round(radioLevel))), detail: "Radio topic not published in sim; using fallback display" },
-    { name: "CAN2 Mobility Bus", percent: Math.max(10, Math.min(100, Math.round((bytesPerSecond / 1400) * 100))), detail: `Telemetry rate ${bytesPerSecond.toFixed(0)} B/s` },
-    { name: "CAN3 Instrument Bus", percent: 61, detail: "Science instrument link initialized" },
-    { name: "CAN4 Aux Bus", percent: 89, detail: "Aux power and lighting nominal" },
-  ];
   const systemChecks = [
     { name: "ROS Link", ok: rosStatus === "connected" },
-    { name: "Power Bus", ok: driveBattery.packVoltageV > 22.2 && armBattery.packVoltageV > 22.2 },
+    { name: "Power Bus", ok: driveBattery.packVoltageV > 22.2 },
     { name: "Thermal", ok: Object.values(sensorTemps).every((t) => t < 75) },
     { name: "Mobility Motors", ok: Object.values(motorEnabled).some(Boolean) },
     { name: "Diagnostics", ok: !topicAvailability.diagnostics || (diagnosticsSummary.error === 0 && diagnosticsSummary.stale === 0) },
@@ -487,24 +508,28 @@ export default function TechnicianDashboard() {
         hours={hours}
         minutes={minutes}
         seconds={seconds}
-        inputHours={inputHours}
-        inputMinutes={inputMinutes}
-        inputSeconds={inputSeconds}
-        setInputHours={setInputHours}
-        setInputMinutes={setInputMinutes}
-        setInputSeconds={setInputSeconds}
         remainingSeconds={remainingSeconds}
         setTimerRunning={setTimerRunning}
         configuredSeconds={configuredSeconds}
+        setConfiguredSeconds={setConfiguredSeconds}
         setRemainingSeconds={setRemainingSeconds}
-        applyTimer={applyTimer}
+        missionId={missionId}
+        extensionState={extensionState}
+        onAddExtension={() => {
+          setRemainingSeconds((prev) => prev + 20 * 60);
+          setConfiguredSeconds((prev) => prev + 20 * 60);
+          setExtensionState("added");
+        }}
+        onUndoExtension={() => {
+          setRemainingSeconds((prev) => Math.max(0, prev - 20 * 60));
+          setConfiguredSeconds((prev) => Math.max(0, prev - 20 * 60));
+          setExtensionState("none");
+        }}
       />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "10px", alignItems: "stretch" }}>
         <PowerPanel
           driveBattery={driveBattery}
-          armBattery={armBattery}
-          sensorTemps={sensorTemps}
         />
 
         <CommsPanel
@@ -512,6 +537,7 @@ export default function TechnicianDashboard() {
           ledState={ledState}
           setLedState={setLedState}
           radioLevel={radioLevel}
+          radioStatus={radioStatus}
           bytesPerSecond={bytesPerSecond}
           freshTelemetryCount={freshTelemetryCount}
           telemetryTopicStates={telemetryTopicStates}
@@ -523,15 +549,11 @@ export default function TechnicianDashboard() {
           motionStats={motionStats}
           estimatedTurnRadiusM={estimatedTurnRadiusM}
           displayedDiagnosticsSummary={displayedDiagnosticsSummary}
-          diagnosticsTelemetryFresh={diagnosticsTelemetryFresh}
           topicAvailability={topicAvailability}
           laserWarningOn={laserWarningOn}
           setLaserWarningOn={setLaserWarningOn}
           wheelFault={wheelFault}
           systemChecks={systemChecks}
-          showCanPopup={showCanPopup}
-          setShowCanPopup={setShowCanPopup}
-          canConnections={canConnections}
         />
       </div>
 

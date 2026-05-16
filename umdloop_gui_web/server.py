@@ -203,9 +203,13 @@ def video_feed(cam_id):
 
 
 MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "umdloop_gui_native", "best.pt"))
-model = YOLO(MODEL_PATH)
+model = None
+if os.path.exists(MODEL_PATH):
+    model = YOLO(MODEL_PATH)
 
 def annotated_stream(camera_index=0):
+    if model is None:
+        return
     cap = cv2.VideoCapture(camera_index)
     while True:
         ok, frame = cap.read()
