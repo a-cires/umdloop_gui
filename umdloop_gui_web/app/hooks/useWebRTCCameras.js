@@ -132,18 +132,27 @@ export default function useWebRTCCameras(url) {
       await pc.setLocalDescription(offer);
 
       // MediaMTX WHEP is non-trickle: the offer must carry all ICE candidates
-      // up front, so wait for gathering to finish before POSTing.
-      if (pc.iceGatheringState !== "complete") {
-        await new Promise((resolve) => {
-          const onChange = () => {
-            if (pc.iceGatheringState === "complete") {
-              pc.removeEventListener("icegatheringstatechange", onChange);
-              resolve();
-            }
-          };
-          pc.addEventListener("icegatheringstatechange", onChange);
-        });
-      }
+      // up front, so wait for gathering to finish before POSTing. Check state
+      // inside the Promise to avoid racing the listener attachment, and cap
+      // the wait so we don't hang if the state machine misbehaves.
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === "complete") {
+          resolve();
+          return;
+        }
+        const cleanup = () => {
+          pc.removeEventListener("icegatheringstatechange", onChange);
+          clearTimeout(timer);
+        };
+        const onChange = () => {
+          if (pc.iceGatheringState === "complete") {
+            cleanup();
+            resolve();
+          }
+        };
+        const timer = setTimeout(() => { cleanup(); resolve(); }, 1500);
+        pc.addEventListener("icegatheringstatechange", onChange);
+      });
 
       // Backend's RTSP publish handshake can lag the WS state broadcast by
       // a few hundred ms; retry on 404 while MediaMTX has no publisher.
