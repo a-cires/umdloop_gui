@@ -315,6 +315,49 @@ def status():
     running = process is not None and process.poll() is None
     return jsonify({"ok": True, "running": running}), 200
 
+
+CAN_INTERFACE = os.getenv("ROVER_CAN_INTERFACE", "can1").strip() or "can1"
+SCOOP_CAN_FRAMES = {
+    "front": "080#6502",
+    "back": "080#6602",
+}
+
+
+def _run_cansend(can_id_data):
+    try:
+        result = subprocess.run(
+            ["cansend", CAN_INTERFACE, can_id_data],
+            check=False,
+            timeout=2,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False, "cansend command not found on host"
+    except subprocess.TimeoutExpired:
+        return False, "cansend timed out"
+    except Exception as exc:
+        return False, str(exc)
+
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or "cansend failed").strip()
+    return True, None
+
+
+@app.post("/scoop/<scoop>/shutdown")
+def shutdown_scoop_servo(scoop):
+    frame = SCOOP_CAN_FRAMES.get(scoop)
+    if frame is None:
+        return jsonify({"ok": False, "error": f"Unknown scoop '{scoop}'"}), 400
+
+    ok, error = _run_cansend(frame)
+    if not ok:
+        return jsonify({"ok": False, "error": error, "interface": CAN_INTERFACE, "frame": frame}), 500
+
+    return jsonify({"ok": True, "interface": CAN_INTERFACE, "frame": frame}), 200
+
+
 @app.get("/navigation/rover-position")
 def rover_position():
     ros_context.start()

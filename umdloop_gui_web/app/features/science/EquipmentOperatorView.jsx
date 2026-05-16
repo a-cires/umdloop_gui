@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import CameraFeed from "../../components/camera/CameraFeed";
 import CameraManagerModal from "../../components/camera/CameraManagerModal";
-import { CAMERA_ROLES } from "../../config";
+import { CAMERA_ROLES, getApiBaseUrl } from "../../config";
 
 const EQUIPMENT_CAMERAS = [
   { label: "Equipment Cam 1", role: CAMERA_ROLES.SCIENCE_1 },
@@ -13,9 +13,16 @@ const EQUIPMENT_CAMERAS = [
   { label: "Equipment Cam 5", role: null },
 ];
 
+const SCOOP_LABELS = {
+  front: "Front Scoop",
+  back: "Back Scoop",
+};
+
 export default function EquipmentOperatorView() {
   const [fullscreenCam, setFullscreenCam] = useState(null);
   const [showCameraManager, setShowCameraManager] = useState(false);
+  const [scoopBusy, setScoopBusy] = useState({ front: false, back: false });
+  const [scoopStatus, setScoopStatus] = useState(null);
 
   useEffect(() => {
     const handleKey = (e) => {
@@ -27,9 +34,78 @@ export default function EquipmentOperatorView() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
+  const shutdownScoop = async (scoop) => {
+    if (scoopBusy[scoop]) return;
+    setScoopBusy((prev) => ({ ...prev, [scoop]: true }));
+    setScoopStatus({ kind: "pending", scoop, message: `Sending shutdown to ${SCOOP_LABELS[scoop]}…` });
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/scoop/${scoop}/shutdown`, { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        const error = data?.error || `HTTP ${response.status}`;
+        setScoopStatus({ kind: "error", scoop, message: `${SCOOP_LABELS[scoop]} shutdown failed: ${error}` });
+      } else {
+        setScoopStatus({ kind: "ok", scoop, message: `${SCOOP_LABELS[scoop]} shutdown sent (${data.frame || "ok"})` });
+      }
+    } catch (err) {
+      setScoopStatus({ kind: "error", scoop, message: `${SCOOP_LABELS[scoop]} shutdown failed: ${err.message}` });
+    } finally {
+      setScoopBusy((prev) => ({ ...prev, [scoop]: false }));
+    }
+  };
+
+  const statusColor = scoopStatus
+    ? scoopStatus.kind === "error"
+      ? "#ff8a8a"
+      : scoopStatus.kind === "ok"
+      ? "#9ce29c"
+      : "#cfcfcf"
+    : "#777";
+
   return (
     <div style={{ display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", gap: "8px", padding: "10px", height: "100%", minHeight: 0, background: "#1a1a1a" }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <button
+          onClick={() => shutdownScoop("front")}
+          disabled={scoopBusy.front}
+          style={{
+            borderRadius: "9999px",
+            border: "2px solid #803737",
+            background: scoopBusy.front ? "#5a1f1f" : "#a31616",
+            color: "white",
+            cursor: scoopBusy.front ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: "12px",
+            fontWeight: 900,
+            whiteSpace: "nowrap",
+            opacity: scoopBusy.front ? 0.7 : 1,
+          }}
+        >
+          Shutdown Front Scoop
+        </button>
+        <button
+          onClick={() => shutdownScoop("back")}
+          disabled={scoopBusy.back}
+          style={{
+            borderRadius: "9999px",
+            border: "2px solid #803737",
+            background: scoopBusy.back ? "#5a1f1f" : "#a31616",
+            color: "white",
+            cursor: scoopBusy.back ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: "12px",
+            fontWeight: 900,
+            whiteSpace: "nowrap",
+            opacity: scoopBusy.back ? 0.7 : 1,
+          }}
+        >
+          Shutdown Back Scoop
+        </button>
+
+        <span style={{ flex: 1, color: statusColor, fontSize: "12px", fontWeight: 700, marginLeft: "4px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {scoopStatus?.message || ""}
+        </span>
+
         <button
           onClick={() => setShowCameraManager(true)}
           style={{

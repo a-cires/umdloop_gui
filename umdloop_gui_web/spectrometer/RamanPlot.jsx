@@ -1,8 +1,8 @@
 /**
  * Live Raman Spectrum Viewer with WebGL accelerated bar rendering
  *
- * X-axis: Photodiode ID (0-3647)
- * Y-axis: Light Intensity (0-255)
+ * X-axis: Wavelength (nm)
+ * Y-axis: Intensity (a.u.)
  *
  * Install: npm install webgl-plot
  *
@@ -63,6 +63,7 @@ const RamanPlot = ({
 
   const [connected, setConnected] = useState(false);
   const [peakInfo, setPeakInfo] = useState("");
+  const [wavelengthBounds, setWavelengthBounds] = useState({ min: null, max: null });
 
   const drawBars = useCallback((canvas, data) => {
     if (!canvas || !data || !data.raw_intensities) return;
@@ -131,6 +132,19 @@ const RamanPlot = ({
 
   const updatePlotData = useCallback((data) => {
     latestData.current = data;
+
+    if (Array.isArray(data.wavenumbers) && data.wavenumbers.length > 0) {
+      let min = Infinity;
+      let max = -Infinity;
+      for (let i = 0; i < data.wavenumbers.length; i += 1) {
+        const w = data.wavenumbers[i];
+        if (w < min) min = w;
+        if (w > max) max = w;
+      }
+      if (Number.isFinite(min) && Number.isFinite(max)) {
+        setWavelengthBounds({ min, max });
+      }
+    }
 
     if (data.peak_positions.length > 0) {
       const peakStr = data.peak_positions
@@ -245,9 +259,9 @@ const RamanPlot = ({
           background: "#111",
         }}
       >
-        <span>0</span>
-        <span>&larr; Photodiode ID &rarr;</span>
-        <span>{NUM_PD}</span>
+        <span>{wavelengthBounds.min != null ? `${wavelengthBounds.min.toFixed(0)} nm` : "—"}</span>
+        <span>&larr; Wavelength (nm) &rarr;</span>
+        <span>{wavelengthBounds.max != null ? `${wavelengthBounds.max.toFixed(0)} nm` : "—"}</span>
       </div>
 
       <div
@@ -262,10 +276,10 @@ const RamanPlot = ({
         }}
       >
         <span>
-          <span style={{ color: "rgba(0,255,100,1)" }}>━━</span> Raw Intensity (0-255)
+          <span style={{ color: "rgba(0,255,100,1)" }}>━━</span> Intensity
         </span>
         <span style={{ marginLeft: "auto", color: "#555" }}>
-          Y: Light Intensity (a.u.)
+          Y: Intensity (a.u.)
         </span>
       </div>
     </div>
