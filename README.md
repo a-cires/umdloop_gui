@@ -66,3 +66,45 @@ C:\Qt\6.10.0\msvc2022_64\bin\windeployqt.exe LoopGui.exe
 
 # Run the application
 .\LoopGui.exe
+
+
+## Orin startup (tmuxinator)
+
+The full runtime stack (web frontend, web server, MediaMTX, camera backend, ROS bringup, rosbridge) can be brought up with a single command using [tmuxinator](https://github.com/tmuxinator/tmuxinator). The project file lives at the repo root: [`orin.yml`](./orin.yml).
+
+### One-time setup on the Orin
+
+```bash
+sudo apt install tmuxinator
+# or: gem install tmuxinator
+
+mkdir -p ~/.config/tmuxinator
+cp ~/infrastructure/umdloop_gui/orin.yml ~/.config/tmuxinator/orin.yml
+```
+
+If your `infrastructure` directory lives somewhere else, update the `root:` field in `orin.yml` accordingly.
+
+### Daily startup
+
+```bash
+ssh 192.168.88.90
+tmuxinator start orin
+```
+
+This creates a tmux session named `orin` with three windows:
+
+| Window     | Panes                                                                 |
+| ---------- | --------------------------------------------------------------------- |
+| `web`      | `npm run start`, `uv run server.py`                                   |
+| `cameras`  | `mediamtx`, `camera-backend`                                          |
+| `ros`      | `delivery.launch.py mode:=jetson`, `rosbridge_websocket_launch.xml`   |
+
+Switch windows with `Ctrl-b` + window number (`0`/`1`/`2`), detach with `Ctrl-b d`, and reattach later with `tmux attach -t orin`.
+
+### Stopping
+
+```bash
+tmuxinator stop orin
+# or
+tmux kill-session -t orin
+```

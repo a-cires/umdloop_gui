@@ -1,0 +1,49 @@
+# Tmuxinator project for the Orin runtime stack.
+#
+# Install on the Orin:
+#   sudo apt install tmuxinator        # or: gem install tmuxinator
+#   mkdir -p ~/.config/tmuxinator
+#   cp orin.yml ~/.config/tmuxinator/orin.yml
+#
+# Start with:
+#   tmuxinator start orin
+#
+# Adjust `root` below if your infrastructure directory lives elsewhere.
+
+name: orin
+root: ~/infrastructure
+
+# Give services a moment between launches so dependents (e.g. rosbridge after
+# the ROS launch) come up cleanly. Bump if you see race conditions.
+pre_window: sleep 0.5
+
+windows:
+  - web:
+      layout: tiled
+      panes:
+        - frontend:
+            - cd umdloop_gui/umdloop_gui_web
+            - npm run start
+        - server:
+            - cd umdloop_gui/umdloop_gui_web
+            - uv run server.py
+
+  - cameras:
+      layout: even-horizontal
+      panes:
+        - mediamtx:
+            - cd camera-streaming-backend
+            - ./mediamtx media.mtx.yml
+        - backend:
+            - cd camera-streaming-backend
+            - ./build/camera-backend
+
+  - ros:
+      layout: even-horizontal
+      panes:
+        - delivery:
+            - cd athena-code
+            - ros2 launch bringup delivery.launch.py mode:=jetson
+        - rosbridge:
+            - cd athena-code
+            - ros2 launch rosbridge_server rosbridge_websocket_launch.xml
