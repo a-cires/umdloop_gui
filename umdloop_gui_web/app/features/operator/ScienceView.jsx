@@ -6,7 +6,7 @@ import CameraFeed from "../../components/camera/CameraFeed";
 import MissionPanel from "../../components/mission/MissionPanel";
 import { CAMERA_ROLES } from "../../config";
 
-const RAMAN_WS_URL = "ws://localhost:5001/ws/spectrum";
+const RAMAN_WS_URL = "ws://192.168.88.90:5001/ws/spectrum";
 
 export default function ScienceView({
   selectedSubsystem,
@@ -189,6 +189,7 @@ export default function ScienceView({
         <div style={{ width: "1px", height: "18px", background: "#4a4a4a" }} />
         <span style={{ fontSize: "11px", color: "#ddd", fontWeight: 800 }}>View:</span>
         <button onClick={() => setSelectedSubsystem?.("Drive (Default)")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Drive (Default)" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Drive</button>
+        <button onClick={() => setSelectedSubsystem?.("Drive (Autonav)")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Drive (Autonav)" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Drive Autonav</button>
         <button onClick={() => setSelectedSubsystem?.("Drive (Science)")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Drive (Science)" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Drive Science</button>
         <button onClick={() => setSelectedSubsystem?.("Arm")} style={{ borderRadius: "6px", border: "1px solid #555", background: selectedSubsystem === "Arm" ? "#7c1919" : "#303030", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px" }}>Arm</button>
         <button onClick={() => setShowCameraManager(true)} style={{ borderRadius: "6px", border: "1px solid #555", background: "#1a3f6f", color: "white", cursor: "pointer", padding: "4px 10px", fontSize: "11px", fontWeight: 700 }}>Camera Manager</button>

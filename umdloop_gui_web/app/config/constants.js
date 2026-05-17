@@ -4,7 +4,7 @@ export const MODES = ["Operator", "Science", "Technician", "Drone", "Navigation"
 export const MODE_ICONS = ["camera.png", "test-tube.png", "sensor.png", "camera.png", "navigation.png", "map.png"];
 export const NAV_MODES = MODES.filter((mode) => mode !== "Drone");
 export const NAV_MODE_ICONS = NAV_MODES.map((mode) => MODE_ICONS[MODES.indexOf(mode)]);
-export const SUBSYSTEMS = ["Drive (Default)", "Drive (Science)", "Arm"];
+export const SUBSYSTEMS = ["Drive (Default)", "Drive (Autonav)", "Drive (Science)", "Arm"];
 export const SCIENCE_SUBSYSTEMS = [
   "Scientist 1 Tab 1",
   "Scientist 2 Tab 1",

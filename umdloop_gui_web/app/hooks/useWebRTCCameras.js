@@ -191,7 +191,10 @@ export default function useWebRTCCameras(url) {
         case "state":
         case "camera_state":
         case "camera_list":
-          setCameras(normalizeCameras(msg));
+        case undefined:
+          if (msg.cameras) {
+            setCameras(normalizeCameras(msg));
+          }
           break;
         case "missions_state":
           setMissions(msg.missions ?? []);
