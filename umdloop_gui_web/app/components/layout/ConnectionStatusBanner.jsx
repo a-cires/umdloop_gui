@@ -32,11 +32,7 @@ export default function ConnectionStatusBanner() {
         role="alert"
         aria-live="assertive"
         style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 1500,
+          flexShrink: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -49,7 +45,6 @@ export default function ConnectionStatusBanner() {
           textTransform: "uppercase",
           borderTop: "2px solid #ff5252",
           animation: "connectionLostPulse 1.4s ease-in-out infinite",
-          pointerEvents: "none",
         }}
       >
         <span

@@ -1,27 +1,16 @@
 "use client";
 
 import React from "react";
-import { TECHNICIAN_TOPICS } from "../../config";
 
 // Visual swatch colors that match the LED presets defined in useLedController.
 const PRESET_SWATCHES = {
-  GREEN:  "#22c55e",
-  AMBER:  "#f59e0b",
-  RED:    "#ef4444",
-  BLUE:   "#3b82f6",
-  WHITE:  "#f5f5f5",
-  CYAN:   "#06b6d4",
-  PURPLE: "#a855f7",
+  GREEN: "#22c55e",
+  RED:   "#ef4444",
+  BLUE:  "#3b82f6",
 };
 
 export default function DiagnosticsPanel({
-  topicAvailability,
-  displayedDiagnosticsSummary,
-  displayedDiagnosticItems,
   led,
-  laserWarningOn,
-  setLaserWarningOn,
-  wheelFault,
   systemChecks,
 }) {
   const showsRate = led.mode === "FLASH" || led.mode === "PULSE";
@@ -55,7 +44,7 @@ export default function DiagnosticsPanel({
                     fontWeight: 700,
                     cursor: "pointer",
                     background: isActive ? PRESET_SWATCHES[presetKey] || "#6d1111" : "#2f2f2f",
-                    color: presetKey === "WHITE" && isActive ? "#111" : "white",
+                    color: "white",
                   }}
                 >
                   {presetKey}
@@ -115,11 +104,6 @@ export default function DiagnosticsPanel({
           {led.lastSendError ? (
             <div style={{ marginTop: "4px", color: "#fca5a5", fontSize: "14px" }}>Last error: {led.lastSendError}</div>
           ) : null}
-          <div style={{ marginTop: "8px", color: displayedDiagnosticsSummary.error > 0 ? "#f87171" : displayedDiagnosticsSummary.warn > 0 ? "#f59e0b" : "#9df79d", fontSize: "18px", fontWeight: 700 }}>Diagnostic Focus: {displayedDiagnosticsSummary.topIssue}</div>
-          <button onClick={() => setLaserWarningOn((prev) => !prev)} style={{ marginTop: "8px", width: "100%", borderRadius: "8px", border: "1px solid #555", padding: "10px 8px", fontSize: "19px", fontWeight: 800, cursor: "pointer", background: laserWarningOn ? "#8f1d1d" : "#2f2f2f", color: "white" }}>
-            {laserWarningOn ? "WARNING: LASER ON" : "Laser Warning Off"}
-          </button>
-          <div style={{ marginTop: "8px", fontSize: "19px", color: wheelFault ? "#ff8080" : "#9df79d", fontWeight: 800 }}>{wheelFault ? "WHEEL FAULT LIGHT: ON" : "WHEEL FAULT LIGHT: OFF"}</div>
         </div>
 
         <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px" }}>
@@ -131,31 +115,6 @@ export default function DiagnosticsPanel({
             </div>
           ))}
         </div>
-      </div>
-
-      <div style={{ background: "#202020", border: "1px solid #3a3a3a", borderRadius: "12px", padding: "12px", height: "100%" }}>
-        <div style={{ fontSize: "20px", color: "#cfcfcf", marginBottom: "10px", fontWeight: 800 }}>Diagnostics Detail</div>
-        {!topicAvailability.diagnostics ? (
-          <div style={{ color: "#bdbdbd", fontSize: "18px" }}>Waiting for {TECHNICIAN_TOPICS.diagnostics.name}</div>
-        ) : displayedDiagnosticItems.length === 0 ? (
-          <div style={{ color: "#9df79d", fontSize: "18px", fontWeight: 800 }}>All reported diagnostics are nominal.</div>
-        ) : (
-          <div style={{ display: "grid", gap: "8px" }}>
-            {displayedDiagnosticItems.map((item) => (
-              <div key={`${item.name}-${item.hardwareId}`} style={{ background: "#2a2a2a", border: "1px solid #3f3f3f", borderRadius: "8px", padding: "10px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "center" }}>
-                  <div style={{ color: "white", fontSize: "18px", fontWeight: 800 }}>{item.name}</div>
-                  <div style={{ color: item.level >= 2 ? "#ff8080" : item.level === 1 ? "#facc15" : item.level === 3 ? "#f59e0b" : "#9df79d", fontSize: "16px", fontWeight: 800 }}>
-                    {item.level >= 2 ? "ERROR" : item.level === 1 ? "WARN" : item.level === 3 ? "STALE" : "OK"}
-                  </div>
-                </div>
-                <div style={{ color: "#d8d8d8", fontSize: "17px", marginTop: "4px" }}>{item.message}</div>
-                {item.values.length > 0 ? <div style={{ color: "#bdbdbd", fontSize: "15px", marginTop: "4px" }}>{item.values.join(" | ")}</div> : null}
-                <div style={{ color: "#9ca3af", fontSize: "15px", marginTop: "4px" }}>Hardware ID: {item.hardwareId}</div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </>
   );

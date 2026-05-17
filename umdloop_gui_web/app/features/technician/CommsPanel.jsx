@@ -20,9 +20,6 @@ export default function CommsPanel({
   estimatedTurnRadiusM,
   displayedDiagnosticsSummary,
   topicAvailability,
-  laserWarningOn,
-  setLaserWarningOn,
-  wheelFault,
   systemChecks,
 }) {
   const ledLabel = led

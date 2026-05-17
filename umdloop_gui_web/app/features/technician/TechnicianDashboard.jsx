@@ -33,7 +33,6 @@ export default function TechnicianDashboard({ missionId }) {
   const [timerRunning, setTimerRunning] = useState(false);
   const [extensionState, setExtensionState] = useState("none");
   const led = useLedController({ initialPreset: "GREEN", initialMode: "SOLID", initialRateHz: 2.0 });
-  const [laserWarningOn, setLaserWarningOn] = useState(false);
 
   const [rosStatus, setRosStatus] = useState("connecting...");
   const [bytesPerSecond, setBytesPerSecond] = useState(0);
@@ -82,7 +81,7 @@ export default function TechnicianDashboard({ missionId }) {
     stale: 0,
     topIssue: "Waiting for diagnostics",
   });
-  const [diagnosticItems, setDiagnosticItems] = useState([]);
+
   const [wheelDiag, setWheelDiag] = useState({
     fl: { velocity: 0, current: 0 },
     fr: { velocity: 0, current: 0 },
@@ -95,16 +94,7 @@ export default function TechnicianDashboard({ missionId }) {
     rl: { orientationDeg: 0, current: 0 },
     rr: { orientationDeg: 0, current: 0 },
   });
-  const [motorEnabled, setMotorEnabled] = useState({
-    wheelFL: true,
-    wheelFR: true,
-    wheelRL: true,
-    wheelRR: true,
-    steerFL: true,
-    steerFR: true,
-    steerRL: true,
-    steerRR: true,
-  });
+  const [motorsEnabled, setMotorsEnabled] = useState(true);
   const [motorCommandStatus, setMotorCommandStatus] = useState("No command sent");
   const rosRef = React.useRef(null);
   const hardStopBurstRef = React.useRef(null);
@@ -300,20 +290,6 @@ export default function TechnicianDashboard({ missionId }) {
       const topIssue = statuses.find((status) => Number(status?.level) > 0);
       nextSummary.topIssue = topIssue?.name || (statuses.length > 0 ? "Diagnostics nominal" : "Waiting for diagnostics");
       setDiagnosticsSummary(nextSummary);
-      setDiagnosticItems(
-        statuses
-          .map((status) => ({
-            name: status?.name || "Unnamed Diagnostic",
-            level: Number(status?.level) || 0,
-            message: status?.message || "No message provided",
-            hardwareId: status?.hardware_id || "N/A",
-            values: Array.isArray(status?.values)
-              ? status.values.filter((entry) => entry?.key && entry?.value).slice(0, 3).map((entry) => `${entry.key}: ${entry.value}`)
-              : [],
-          }))
-          .sort((a, b) => b.level - a.level)
-          .slice(0, 6)
-      );
       markTopicAvailable("diagnostics");
     });
 
@@ -414,16 +390,7 @@ export default function TechnicianDashboard({ missionId }) {
 
       publishBurst();
       hardStopBurstRef.current = setInterval(publishBurst, 120);
-      setMotorEnabled({
-        wheelFL: false,
-        wheelFR: false,
-        wheelRL: false,
-        wheelRR: false,
-        steerFL: false,
-        steerFR: false,
-        steerRL: false,
-        steerRR: false,
-      });
+      setMotorsEnabled(false);
       setMotorCommandStatus(`Stop burst sent across ${TECHNICIAN_COMMAND_TOPICS.hardStopTwist.length + TECHNICIAN_COMMAND_TOPICS.hardStopStamped.length} drive topics`);
     } catch (error) {
       setMotorCommandStatus(`Stop failed: ${error.message}`);
@@ -475,19 +442,15 @@ export default function TechnicianDashboard({ missionId }) {
   const displayedTilt = tilt;
   const displayedImuDynamics = imuDynamics;
   const displayedDiagnosticsSummary = diagnosticsSummary;
-  const displayedDiagnosticItems = diagnosticItems;
   const tiltWarning = displayedTilt.magnitudeDeg > 12;
   const safetyPercent = Math.max(0, Math.min(100, (displayedTilt.magnitudeDeg / 15) * 100));
   const headingLabel = displayedHeadingDeg == null ? "UNKNOWN" : ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round((((displayedHeadingDeg % 360) + 360) % 360) / 45) % 8];
   const avgWheelVelocity = Object.values(displayedWheelDiag).reduce((sum, wheel) => sum + Math.abs(wheel.velocity), 0) / 4;
-  const steerSpreadDeg = Math.max(...Object.values(displayedSteerDiag).map((steer) => steer.orientationDeg)) - Math.min(...Object.values(displayedSteerDiag).map((steer) => steer.orientationDeg));
   const wheelImbalanceDeg = Math.max(...Object.values(displayedWheelDiag).map((wheel) => Math.abs(wheel.velocity))) - Math.min(...Object.values(displayedWheelDiag).map((wheel) => Math.abs(wheel.velocity)));
-  const frontSteerMismatchDeg = Math.abs(displayedSteerDiag.fl.orientationDeg - displayedSteerDiag.fr.orientationDeg);
   const rearSteerMismatchDeg = Math.abs(displayedSteerDiag.rl.orientationDeg - displayedSteerDiag.rr.orientationDeg);
   const motionState = displayedVelocityMps < 0.05 ? "STOPPED" : Math.abs(motionStats.yawRateDps) > 8 ? "TURNING" : "TRACKING";
   const estimatedTurnRadiusM = Math.abs(motionStats.yawRateDps) < 0.5 ? null : displayedVelocityMps / Math.max(0.01, Math.abs(motionStats.yawRateDps) * (Math.PI / 180));
-  const mobilityTrackingState = wheelImbalanceDeg > 1.5 || frontSteerMismatchDeg > 8 || rearSteerMismatchDeg > 8 ? "ASYMMETRIC" : "BALANCED";
-  const wheelFault = Object.values(wheelDiag).some((wheel) => Math.abs(wheel.current) > 18);
+  const mobilityTrackingState = wheelImbalanceDeg > 1.5 || rearSteerMismatchDeg > 8 ? "ASYMMETRIC" : "BALANCED";
   const stalestTelemetry = telemetryTopicStates.reduce((worst, item) => {
     if (item.ageMs == null) return worst;
     if (worst == null || item.ageMs > worst.ageMs) return item;
@@ -497,7 +460,7 @@ export default function TechnicianDashboard({ missionId }) {
     { name: "ROS Link", ok: rosStatus === "connected" },
     { name: "Power Bus", ok: driveBattery.packVoltageV > 22.2 },
     { name: "Thermal", ok: Object.values(sensorTemps).every((t) => t < 75) },
-    { name: "Mobility Motors", ok: Object.values(motorEnabled).some(Boolean) },
+    { name: "Mobility Motors", ok: motorsEnabled },
     { name: "Diagnostics", ok: !topicAvailability.diagnostics || (diagnosticsSummary.error === 0 && diagnosticsSummary.stale === 0) },
     { name: "Telemetry Freshness", ok: freshTelemetryCount >= 4 },
     { name: "Safety Envelope", ok: !tiltWarning },
@@ -550,24 +513,17 @@ export default function TechnicianDashboard({ missionId }) {
           estimatedTurnRadiusM={estimatedTurnRadiusM}
           displayedDiagnosticsSummary={displayedDiagnosticsSummary}
           topicAvailability={topicAvailability}
-          laserWarningOn={laserWarningOn}
-          setLaserWarningOn={setLaserWarningOn}
-          wheelFault={wheelFault}
           systemChecks={systemChecks}
         />
       </div>
 
       <MobilityPanel
         avgWheelVelocity={avgWheelVelocity}
-        steerSpreadDeg={steerSpreadDeg}
         wheelImbalanceDeg={wheelImbalanceDeg}
-        frontSteerMismatchDeg={frontSteerMismatchDeg}
         rearSteerMismatchDeg={rearSteerMismatchDeg}
         mobilityTrackingState={mobilityTrackingState}
         displayedWheelDiag={displayedWheelDiag}
         displayedSteerDiag={displayedSteerDiag}
-        motorEnabled={motorEnabled}
-        setMotorEnabled={setMotorEnabled}
         sendHardMotorStop={sendHardMotorStop}
         motorCommandStatus={motorCommandStatus}
         displayedTilt={displayedTilt}
@@ -577,13 +533,7 @@ export default function TechnicianDashboard({ missionId }) {
       />
 
       <DiagnosticsPanel
-        topicAvailability={topicAvailability}
-        displayedDiagnosticsSummary={displayedDiagnosticsSummary}
-        displayedDiagnosticItems={displayedDiagnosticItems}
         led={led}
-        laserWarningOn={laserWarningOn}
-        setLaserWarningOn={setLaserWarningOn}
-        wheelFault={wheelFault}
         systemChecks={systemChecks}
       />
     </div>

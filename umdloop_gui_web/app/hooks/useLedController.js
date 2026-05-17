@@ -8,12 +8,8 @@ import { getLedStatus, sendLedCommand } from "../lib/api";
 // elsewhere in the GUI while staying readable on the NeoPixel strip.
 export const LED_PRESETS = {
   GREEN:  { label: "GREEN",  rgb: [0,   255, 0]   },
-  AMBER:  { label: "AMBER",  rgb: [255, 140, 0]   },
   RED:    { label: "RED",    rgb: [255, 0,   0]   },
   BLUE:   { label: "BLUE",   rgb: [0,   0,   255] },
-  WHITE:  { label: "WHITE",  rgb: [255, 255, 255] },
-  CYAN:   { label: "CYAN",   rgb: [0,   255, 255] },
-  PURPLE: { label: "PURPLE", rgb: [180, 0,   255] },
 };
 
 export const LED_MODES = ["SOLID", "FLASH", "PULSE", "OFF"];
